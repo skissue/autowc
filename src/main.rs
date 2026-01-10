@@ -1,10 +1,11 @@
 #![allow(irrefutable_let_patterns)]
 
-mod handlers;
-
 mod grabs;
+mod handlers;
 mod input;
+mod keycodes;
 mod state;
+mod stdin;
 mod winit;
 
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
@@ -29,6 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn a test client, that will run under Smallvil
     spawn_client();
 
+    crate::stdin::init_stdin(&mut event_loop)?;
+
     event_loop.run(None, &mut state, move |_| {
         // Smallvil is running
     })?;
@@ -46,15 +49,7 @@ fn init_logging() {
 
 fn spawn_client() {
     let mut args = std::env::args().skip(1);
-    let flag = args.next();
-    let arg = args.next();
+    let command = args.next().unwrap();
 
-    match (flag.as_deref(), arg) {
-        (Some("-c") | Some("--command"), Some(command)) => {
-            std::process::Command::new(command).spawn().ok();
-        }
-        _ => {
-            std::process::Command::new("weston-terminal").spawn().ok();
-        }
-    }
+    std::process::Command::new(command).args(args).spawn().ok();
 }
