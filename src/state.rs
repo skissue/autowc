@@ -51,7 +51,11 @@ pub struct AutoWC {
 }
 
 impl AutoWC {
-    pub fn new(event_loop: &mut EventLoop<Self>, display: Display<Self>) -> Self {
+    pub fn new(
+        event_loop: &mut EventLoop<Self>,
+        display: Display<Self>,
+        virtual_size: Size<i32, Logical>,
+    ) -> Self {
         let start_time = std::time::Instant::now();
 
         let dh = display.handle();
@@ -89,9 +93,6 @@ impl AutoWC {
         // Windows get a position and stacking order through mapping.
         // Outputs become views of a part of the Space and can be rendered via Space::render_output.
         let space = Space::default();
-
-        // TODO: Make this configurable via CLI and share it with headless mode.
-        let virtual_size = Size::from((1280, 720));
 
         // Setup a wayland socket that will be used to accept clients
         let socket_name = Self::init_wayland_listener(display, event_loop);
