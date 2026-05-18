@@ -9,7 +9,7 @@ use smithay::{
         keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
-    utils::SERIAL_COUNTER,
+    utils::{Physical, Point, SERIAL_COUNTER},
 };
 
 use crate::state::AutoWC;
@@ -49,17 +49,17 @@ impl AutoWC {
             }
             InputEvent::PointerMotion { .. } => {}
             InputEvent::PointerMotionAbsolute { event, .. } => {
-                let output = self.space.outputs().next().unwrap();
-
-                let output_geo = self.space.output_geometry(output).unwrap();
-
-                let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
-
                 let serial = SERIAL_COUNTER.next_serial();
-
+                let host_pos: Point<f64, Physical> = (event.x(), event.y()).into();
                 let pointer = self.seat.get_pointer().unwrap();
 
-                let under = self.surface_under(pos);
+                let (pos, under) = if let Some(pos) = self.host_to_virtual(host_pos) {
+                    self.pointer_in_viewport = true;
+                    (pos, self.surface_under(pos))
+                } else {
+                    self.pointer_in_viewport = false;
+                    (pointer.current_location(), None)
+                };
 
                 pointer.motion(
                     self,
@@ -73,6 +73,10 @@ impl AutoWC {
                 pointer.frame(self);
             }
             InputEvent::PointerButton { event, .. } => {
+                if !self.pointer_in_viewport {
+                    return;
+                }
+
                 let pointer = self.seat.get_pointer().unwrap();
 
                 let serial = SERIAL_COUNTER.next_serial();
@@ -93,6 +97,10 @@ impl AutoWC {
                 pointer.frame(self);
             }
             InputEvent::PointerAxis { event, .. } => {
+                if !self.pointer_in_viewport {
+                    return;
+                }
+
                 let source = event.source();
 
                 let horizontal_amount = event.amount(Axis::Horizontal).unwrap_or_else(|| {

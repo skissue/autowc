@@ -12,7 +12,7 @@ use smithay::{
             Display, DisplayHandle,
         },
     },
-    utils::{Logical, Point, Size, SERIAL_COUNTER},
+    utils::{Logical, Physical, Point, Rectangle, Size, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
@@ -33,6 +33,8 @@ pub struct AutoWC {
     pub virtual_size: Size<i32, Logical>,
     pub primary_window: Option<Window>,
     pub overlay_windows: Vec<Window>,
+    pub host_size: Size<i32, Physical>,
+    pub pointer_in_viewport: bool,
 
     // Smithay State
     pub compositor_state: CompositorState,
@@ -105,6 +107,8 @@ impl AutoWC {
             virtual_size,
             primary_window: None,
             overlay_windows: Vec::new(),
+            host_size: virtual_size.to_physical(1),
+            pointer_in_viewport: false,
 
             compositor_state,
             xdg_shell_state,
@@ -170,6 +174,45 @@ impl AutoWC {
                     .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
                     .map(|(s, p)| (s, (p + location).to_f64()))
             })
+    }
+
+    pub fn set_host_size(&mut self, size: Size<i32, Physical>) {
+        self.host_size = size;
+    }
+
+    pub fn presentation_viewport(&self) -> Rectangle<i32, Physical> {
+        let host_size = self.host_size;
+        if host_size.w <= 0 || host_size.h <= 0 {
+            return Rectangle::from_size((0, 0).into());
+        }
+
+        let scale_x = host_size.w as f64 / self.virtual_size.w as f64;
+        let scale_y = host_size.h as f64 / self.virtual_size.h as f64;
+        let scale = scale_x.min(scale_y);
+
+        let width = (self.virtual_size.w as f64 * scale).round() as i32;
+        let height = (self.virtual_size.h as f64 * scale).round() as i32;
+        let x = (host_size.w - width) / 2;
+        let y = (host_size.h - height) / 2;
+
+        Rectangle::new((x, y).into(), (width, height).into())
+    }
+
+    pub fn host_to_virtual(&self, pos: Point<f64, Physical>) -> Option<Point<f64, Logical>> {
+        let viewport = self.presentation_viewport();
+        if viewport.size.w <= 0 || viewport.size.h <= 0 {
+            return None;
+        }
+
+        let x = pos.x - viewport.loc.x as f64;
+        let y = pos.y - viewport.loc.y as f64;
+        if x < 0.0 || y < 0.0 || x >= viewport.size.w as f64 || y >= viewport.size.h as f64 {
+            return None;
+        }
+
+        let scale_x = viewport.size.w as f64 / self.virtual_size.w as f64;
+        let scale_y = viewport.size.h as f64 / self.virtual_size.h as f64;
+        Some(Point::from((x / scale_x, y / scale_y)))
     }
 
     pub fn map_new_toplevel(&mut self, window: Window) {

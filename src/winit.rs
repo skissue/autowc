@@ -3,11 +3,13 @@ use std::time::Duration;
 use smithay::{
     backend::{
         renderer::{
-            damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement,
+            damage::OutputDamageTracker,
+            element::utils::{constrain_render_elements, ConstrainAlign, ConstrainScaleBehavior},
             gles::GlesRenderer,
         },
         winit::{self, WinitEvent},
     },
+    desktop::{space::space_render_elements, Window},
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{
         calloop::EventLoop,
@@ -22,8 +24,8 @@ pub fn init_winit(
     event_loop: &mut EventLoop<AutoWC>,
     state: &mut AutoWC,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // TODO: Once viewer scaling exists, decouple the initial host window size
-    // from the virtual output size.
+    // TODO: Make the initial host window size configurable. Defaulting to
+    // the virtual output size keeps early manual testing predictable.
     let window_attributes = WinitWindow::default_attributes()
         .with_inner_size(LogicalSize::new(
             state.virtual_size.w as f64,
@@ -31,7 +33,8 @@ pub fn init_winit(
         ))
         .with_title("AutoWC")
         .with_visible(true);
-    let (mut backend, winit) = winit::init_from_attributes(window_attributes)?;
+    let (mut backend, winit) = winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
+    state.set_host_size(backend.window_size());
 
     let mode = Mode {
         size: state.virtual_size.to_physical(1),
@@ -59,39 +62,55 @@ pub fn init_winit(
 
     state.space.map_output(&output, (0, 0));
 
-    let mut damage_tracker = OutputDamageTracker::from_output(&output);
+    let mut damage_tracker =
+        OutputDamageTracker::new(backend.window_size(), 1.0, Transform::Flipped180);
 
     event_loop
         .handle()
         .insert_source(winit, move |event, _, state| {
             match event {
-                // TODO: Add viewer scaling/letterboxing. Host window resize should
-                // not change the virtual output size seen by clients.
-                WinitEvent::Resized { .. } => {}
+                WinitEvent::Resized { size, .. } => {
+                    state.set_host_size(size);
+                    damage_tracker = OutputDamageTracker::new(size, 1.0, Transform::Flipped180);
+                }
                 WinitEvent::Input(event) => state.process_input_event(event),
                 WinitEvent::Redraw => {
                     let size = backend.window_size();
+                    if size != state.host_size {
+                        state.set_host_size(size);
+                        damage_tracker = OutputDamageTracker::new(size, 1.0, Transform::Flipped180);
+                    }
                     let damage = Rectangle::from_size(size);
 
                     {
                         let (renderer, mut framebuffer) = backend.bind().unwrap();
-                        smithay::desktop::space::render_output::<
-                            _,
-                            WaylandSurfaceRenderElement<GlesRenderer>,
-                            _,
-                            _,
-                        >(
-                            &output,
+                        let render_elements = space_render_elements::<_, Window, _>(
                             renderer,
-                            &mut framebuffer,
-                            1.0,
-                            0,
                             [&state.space],
-                            &[],
-                            &mut damage_tracker,
-                            [0.1, 0.1, 0.1, 1.0],
+                            &output,
+                            1.0,
                         )
                         .unwrap();
+                        let render_elements: Vec<_> = constrain_render_elements(
+                            render_elements,
+                            (0, 0),
+                            Rectangle::from_size(size),
+                            Rectangle::from_size(state.virtual_size.to_physical(1)),
+                            ConstrainScaleBehavior::Fit,
+                            ConstrainAlign::CENTER,
+                            1.0,
+                        )
+                        .collect();
+
+                        damage_tracker
+                            .render_output(
+                                renderer,
+                                &mut framebuffer,
+                                0,
+                                &render_elements,
+                                [0.0, 0.0, 0.0, 1.0],
+                            )
+                            .unwrap();
                     }
                     backend.submit(Some(&[damage])).unwrap();
 
