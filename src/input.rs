@@ -2,14 +2,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-        KeyState, KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
+        AbsolutePositionEvent, Axis, AxisSource, Event, InputBackend, InputEvent, KeyState,
+        KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
     },
     input::{
         keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::SERIAL_COUNTER,
 };
 
@@ -75,37 +74,12 @@ impl Smallvil {
             }
             InputEvent::PointerButton { event, .. } => {
                 let pointer = self.seat.get_pointer().unwrap();
-                let keyboard = self.seat.get_keyboard().unwrap();
 
                 let serial = SERIAL_COUNTER.next_serial();
 
                 let button = event.button_code();
 
                 let button_state = event.state();
-
-                if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
-                    if let Some((window, _loc)) = self
-                        .space
-                        .element_under(pointer.current_location())
-                        .map(|(w, l)| (w.clone(), l))
-                    {
-                        self.space.raise_element(&window, true);
-                        keyboard.set_focus(
-                            self,
-                            Some(window.toplevel().unwrap().wl_surface().clone()),
-                            serial,
-                        );
-                        self.space.elements().for_each(|window| {
-                            window.toplevel().unwrap().send_pending_configure();
-                        });
-                    } else {
-                        self.space.elements().for_each(|window| {
-                            window.set_activated(false);
-                            window.toplevel().unwrap().send_pending_configure();
-                        });
-                        keyboard.set_focus(self, Option::<WlSurface>::None, serial);
-                    }
-                };
 
                 pointer.button(
                     self,

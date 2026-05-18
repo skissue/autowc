@@ -1,4 +1,4 @@
-use crate::{grabs::resize_grab, state::ClientState, Smallvil};
+use crate::{state::ClientState, Smallvil};
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_shm,
@@ -9,13 +9,12 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            get_parent, is_sync_subsurface, CompositorClientState, CompositorHandler, CompositorState,
+            get_parent, is_sync_subsurface, CompositorClientState, CompositorHandler,
+            CompositorState,
         },
         shm::{ShmHandler, ShmState},
     },
 };
-
-use super::xdg_shell;
 
 impl CompositorHandler for Smallvil {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -42,8 +41,7 @@ impl CompositorHandler for Smallvil {
             }
         };
 
-        xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
-        resize_grab::handle_commit(&mut self.space, surface);
+        super::xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
     }
 }
 
