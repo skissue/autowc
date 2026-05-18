@@ -13,16 +13,16 @@ use smithay::{
     utils::{Rectangle, Transform},
 };
 
-use crate::Smallvil;
+use crate::AutoWC;
 
 pub fn init_winit(
-    event_loop: &mut EventLoop<Smallvil>,
-    state: &mut Smallvil,
+    event_loop: &mut EventLoop<AutoWC>,
+    state: &mut AutoWC,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (mut backend, winit) = winit::init()?;
 
     let mode = Mode {
-        size: backend.window_size(),
+        size: state.virtual_size.to_physical(1),
         refresh: 60_000,
     };
 
@@ -36,7 +36,7 @@ pub fn init_winit(
             serial_number: "Unknown".into(),
         },
     );
-    let _global = output.create_global::<Smallvil>(&state.display_handle);
+    let _global = output.create_global::<AutoWC>(&state.display_handle);
     output.change_current_state(
         Some(mode),
         Some(Transform::Flipped180),
@@ -53,17 +53,9 @@ pub fn init_winit(
         .handle()
         .insert_source(winit, move |event, _, state| {
             match event {
-                WinitEvent::Resized { size, .. } => {
-                    output.change_current_state(
-                        Some(Mode {
-                            size,
-                            refresh: 60_000,
-                        }),
-                        None,
-                        None,
-                        None,
-                    );
-                }
+                // TODO: Add viewer scaling/letterboxing. Host window resize should
+                // not change the virtual output size seen by clients.
+                WinitEvent::Resized { .. } => {}
                 WinitEvent::Input(event) => state.process_input_event(event),
                 WinitEvent::Redraw => {
                     let size = backend.window_size();

@@ -3,14 +3,14 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::{keycodes::key_to_code, EventLoop, Smallvil};
+use crate::{keycodes::key_to_code, AutoWC, EventLoop};
 use smithay::{
     backend::input::KeyState,
     reexports::calloop::{self, channel::Event},
 };
 
 pub fn init_stdin(
-    event_loop: &mut EventLoop<Smallvil>,
+    event_loop: &mut EventLoop<AutoWC>,
 ) -> Result<JoinHandle<()>, Box<dyn std::error::Error>> {
     let (tx, rx) = calloop::channel::channel();
 

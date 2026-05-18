@@ -1,4 +1,4 @@
-use crate::{state::ClientState, Smallvil};
+use crate::{state::ClientState, AutoWC};
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_shm,
@@ -16,7 +16,7 @@ use smithay::{
     },
 };
 
-impl CompositorHandler for Smallvil {
+impl CompositorHandler for AutoWC {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.compositor_state
     }
@@ -41,19 +41,19 @@ impl CompositorHandler for Smallvil {
             }
         };
 
-        super::xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
+        super::xdg_shell::handle_commit(self, surface);
     }
 }
 
-impl BufferHandler for Smallvil {
+impl BufferHandler for AutoWC {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
 }
 
-impl ShmHandler for Smallvil {
+impl ShmHandler for AutoWC {
     fn shm_state(&self) -> &ShmState {
         &self.shm_state
     }
 }
 
-delegate_compositor!(Smallvil);
-delegate_shm!(Smallvil);
+delegate_compositor!(AutoWC);
+delegate_shm!(AutoWC);

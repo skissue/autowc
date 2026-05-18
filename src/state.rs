@@ -5,13 +5,14 @@ use smithay::{
     input::{Seat, SeatState},
     reexports::{
         calloop::{generic::Generic, EventLoop, Interest, LoopSignal, Mode, PostAction},
+        wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::wl_surface::WlSurface,
             Display, DisplayHandle,
         },
     },
-    utils::{Logical, Point},
+    utils::{Logical, Point, Size, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
@@ -22,34 +23,37 @@ use smithay::{
     },
 };
 
-pub struct Smallvil {
+pub struct AutoWC {
     pub start_time: std::time::Instant,
     pub socket_name: OsString,
     pub display_handle: DisplayHandle,
 
     pub space: Space<Window>,
     pub loop_signal: LoopSignal,
+    pub virtual_size: Size<i32, Logical>,
+    pub primary_window: Option<Window>,
+    pub overlay_windows: Vec<Window>,
 
     // Smithay State
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
     pub output_manager_state: OutputManagerState,
-    pub seat_state: SeatState<Smallvil>,
+    pub seat_state: SeatState<AutoWC>,
     pub data_device_state: DataDeviceState,
     pub popups: PopupManager,
 
     pub seat: Seat<Self>,
 }
 
-impl Smallvil {
+impl AutoWC {
     pub fn new(event_loop: &mut EventLoop<Self>, display: Display<Self>) -> Self {
         let start_time = std::time::Instant::now();
 
         let dh = display.handle();
 
         // Here we initialize implementations of some wayland protocols
-        // Some of them require us to implement traits on the Smallvil state,
+        // Some of them require us to implement traits on the AutoWC state,
         // you can find those implementations in the `crate::handlers` module
 
         // Initialize protocols needed for displaying windows
@@ -82,6 +86,9 @@ impl Smallvil {
         // Outputs become views of a part of the Space and can be rendered via Space::render_output.
         let space = Space::default();
 
+        // TODO: Make this configurable via CLI and share it with headless mode.
+        let virtual_size = Size::from((1280, 720));
+
         // Setup a wayland socket that will be used to accept clients
         let socket_name = Self::init_wayland_listener(display, event_loop);
 
@@ -95,6 +102,9 @@ impl Smallvil {
             space,
             loop_signal,
             socket_name,
+            virtual_size,
+            primary_window: None,
+            overlay_windows: Vec::new(),
 
             compositor_state,
             xdg_shell_state,
@@ -108,7 +118,7 @@ impl Smallvil {
     }
 
     fn init_wayland_listener(
-        display: Display<Smallvil>,
+        display: Display<AutoWC>,
         event_loop: &mut EventLoop<Self>,
     ) -> OsString {
         // Creates a new listening socket, automatically choosing the next available `wayland` socket name.
@@ -161,9 +171,124 @@ impl Smallvil {
                     .map(|(s, p)| (s, (p + location).to_f64()))
             })
     }
+
+    pub fn map_new_toplevel(&mut self, window: Window) {
+        if self.primary_window.is_none() {
+            self.configure_primary(&window);
+            self.space.map_element(window.clone(), (0, 0), false);
+            self.primary_window = Some(window.clone());
+            self.focus_window(Some(&window));
+            return;
+        }
+
+        self.configure_overlay(&window);
+        self.space.map_element(window.clone(), (0, 0), false);
+        self.overlay_windows.push(window.clone());
+        self.focus_window(Some(&window));
+    }
+
+    pub fn remove_toplevel(&mut self, surface: &WlSurface) {
+        if self
+            .primary_window
+            .as_ref()
+            .is_some_and(|window| window.toplevel().unwrap().wl_surface() == surface)
+        {
+            if let Some(window) = self.primary_window.take() {
+                self.space.unmap_elem(&window);
+            }
+            self.promote_overlay();
+            return;
+        }
+
+        if let Some(index) = self
+            .overlay_windows
+            .iter()
+            .position(|window| window.toplevel().unwrap().wl_surface() == surface)
+        {
+            let window = self.overlay_windows.remove(index);
+            self.space.unmap_elem(&window);
+            let next_focus = self
+                .overlay_windows
+                .last()
+                .cloned()
+                .or_else(|| self.primary_window.clone());
+            self.focus_window(next_focus.as_ref());
+        }
+
+        // TODO: Add the session lifecycle policy: exit when empty, stay alive, or
+        // exit with the launched child.
+    }
+
+    pub fn handle_toplevel_commit(&mut self, surface: &WlSurface) {
+        if let Some(window) = self
+            .overlay_windows
+            .iter()
+            .find(|window| window.toplevel().unwrap().wl_surface() == surface)
+            .cloned()
+        {
+            self.center_overlay(&window);
+        }
+    }
+
+    pub fn configure_primary(&self, window: &Window) {
+        let toplevel = window.toplevel().unwrap();
+        toplevel.with_pending_state(|state| {
+            state.states.set(xdg_toplevel::State::Fullscreen);
+            state.size = Some(self.virtual_size);
+        });
+        window.set_activated(true);
+    }
+
+    pub fn configure_overlay(&self, window: &Window) {
+        let toplevel = window.toplevel().unwrap();
+        toplevel.with_pending_state(|state| {
+            state.states.unset(xdg_toplevel::State::Fullscreen);
+            state.size = None;
+        });
+        window.set_activated(true);
+    }
+
+    pub fn focus_window(&mut self, window: Option<&Window>) {
+        let surface = window.map(|window| window.toplevel().unwrap().wl_surface().clone());
+        let serial = SERIAL_COUNTER.next_serial();
+        let keyboard = self.seat.get_keyboard().unwrap();
+        keyboard.set_focus(self, surface, serial);
+    }
+
+    fn promote_overlay(&mut self) {
+        let Some(window) = self.overlay_windows.pop() else {
+            self.focus_window(None);
+            return;
+        };
+
+        self.configure_primary(&window);
+        self.space.map_element(window.clone(), (0, 0), false);
+        self.primary_window = Some(window.clone());
+        window.toplevel().unwrap().send_pending_configure();
+
+        let overlays = self.overlay_windows.clone();
+        for overlay in overlays {
+            self.center_overlay(&overlay);
+        }
+
+        self.focus_window(Some(&window));
+    }
+
+    fn center_overlay(&mut self, window: &Window) {
+        let geometry = window.geometry();
+        if geometry.size.w <= 0 || geometry.size.h <= 0 {
+            return;
+        }
+
+        // TODO: Replace this with a real overlay policy. This should eventually
+        // consider xdg parent/transient relationships and clamp to the output.
+        let x = ((self.virtual_size.w - geometry.size.w) / 2).max(0);
+        let y = ((self.virtual_size.h - geometry.size.h) / 2).max(0);
+        self.space.map_element(window.clone(), (x, y), false);
+    }
 }
 
-/// Data associated with a wayland client that connects to Smallvil.
+/// Data associated with a wayland client that connects to AutoWC.
 /// One instance of this type per client.
 #[derive(Default)]
 pub struct ClientState {

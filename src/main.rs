@@ -8,31 +8,31 @@ mod stdin;
 mod winit;
 
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
-pub use state::Smallvil;
+pub use state::AutoWC;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
 
-    let mut event_loop: EventLoop<Smallvil> = EventLoop::try_new()?;
+    let mut event_loop: EventLoop<AutoWC> = EventLoop::try_new()?;
 
-    let display: Display<Smallvil> = Display::new()?;
+    let display: Display<AutoWC> = Display::new()?;
 
-    let mut state = Smallvil::new(&mut event_loop, display);
+    let mut state = AutoWC::new(&mut event_loop, display);
 
     // Open a Wayland/X11 window for our nested compositor
     crate::winit::init_winit(&mut event_loop, &mut state)?;
 
-    // Set WAYLAND_DISPLAY to our socket name, so child processes connect to Smallvil rather
+    // Set WAYLAND_DISPLAY to our socket name, so child processes connect to AutoWC rather
     // than the host compositor
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
-    // Spawn a test client, that will run under Smallvil
+    // Spawn the session client that will run under AutoWC.
     spawn_client();
 
     crate::stdin::init_stdin(&mut event_loop)?;
 
     event_loop.run(None, &mut state, move |_| {
-        // Smallvil is running
+        // AutoWC is running
     })?;
 
     Ok(())

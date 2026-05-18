@@ -12,9 +12,9 @@ use smithay::{
     utils::SERIAL_COUNTER,
 };
 
-use crate::state::Smallvil;
+use crate::state::AutoWC;
 
-impl Smallvil {
+impl AutoWC {
     pub fn process_virtual_input_event(&mut self, code: u32, state: KeyState) {
         let serial = SERIAL_COUNTER.next_serial();
         let time = SystemTime::now()

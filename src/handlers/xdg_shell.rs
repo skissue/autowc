@@ -1,8 +1,6 @@
 use smithay::{
     delegate_xdg_shell,
-    desktop::{
-        find_popup_root_surface, get_popup_toplevel_coords, PopupKind, PopupManager, Space, Window,
-    },
+    desktop::{find_popup_root_surface, get_popup_toplevel_coords, PopupKind, Window},
     reexports::wayland_server::protocol::{wl_seat, wl_surface::WlSurface},
     utils::Serial,
     wayland::{
@@ -14,16 +12,16 @@ use smithay::{
     },
 };
 
-use crate::Smallvil;
+use crate::AutoWC;
 
-impl XdgShellHandler for Smallvil {
+impl XdgShellHandler for AutoWC {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface);
-        self.space.map_element(window, (0, 0), false);
+        self.map_new_toplevel(window);
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
@@ -49,19 +47,25 @@ impl XdgShellHandler for Smallvil {
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
         // TODO popup grabs
     }
+
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        self.remove_toplevel(surface.wl_surface());
+    }
 }
 
 // Xdg Shell
-delegate_xdg_shell!(Smallvil);
+delegate_xdg_shell!(AutoWC);
 
 /// Should be called on `WlSurface::commit`
-pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: &WlSurface) {
+pub fn handle_commit(state: &mut AutoWC, surface: &WlSurface) {
     // Handle toplevel commits.
-    if let Some(window) = space
+    let window = state
+        .space
         .elements()
         .find(|w| w.toplevel().unwrap().wl_surface() == surface)
-        .cloned()
-    {
+        .cloned();
+
+    if let Some(window) = window {
         let initial_configure_sent = with_states(surface, |states| {
             states
                 .data_map
@@ -75,11 +79,13 @@ pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: 
         if !initial_configure_sent {
             window.toplevel().unwrap().send_configure();
         }
+
+        state.handle_toplevel_commit(surface);
     }
 
     // Handle popup commits.
-    popups.commit(surface);
-    if let Some(popup) = popups.find_popup(surface) {
+    state.popups.commit(surface);
+    if let Some(popup) = state.popups.find_popup(surface) {
         match popup {
             PopupKind::Xdg(ref xdg) => {
                 if !xdg.is_initial_configure_sent() {
@@ -93,7 +99,7 @@ pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: 
     }
 }
 
-impl Smallvil {
+impl AutoWC {
     fn unconstrain_popup(&self, popup: &PopupSurface) {
         let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) else {
             return;
