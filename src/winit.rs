@@ -9,7 +9,10 @@ use smithay::{
         winit::{self, WinitEvent},
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
-    reexports::calloop::EventLoop,
+    reexports::{
+        calloop::EventLoop,
+        winit::{dpi::LogicalSize, window::Window as WinitWindow},
+    },
     utils::{Rectangle, Transform},
 };
 
@@ -19,7 +22,16 @@ pub fn init_winit(
     event_loop: &mut EventLoop<AutoWC>,
     state: &mut AutoWC,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (mut backend, winit) = winit::init()?;
+    // TODO: Once viewer scaling exists, decouple the initial host window size
+    // from the virtual output size.
+    let window_attributes = WinitWindow::default_attributes()
+        .with_inner_size(LogicalSize::new(
+            state.virtual_size.w as f64,
+            state.virtual_size.h as f64,
+        ))
+        .with_title("AutoWC")
+        .with_visible(true);
+    let (mut backend, winit) = winit::init_from_attributes(window_attributes)?;
 
     let mode = Mode {
         size: state.virtual_size.to_physical(1),
