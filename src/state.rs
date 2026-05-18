@@ -1,4 +1,4 @@
-use std::{ffi::OsString, sync::Arc};
+use std::{ffi::OsString, process::Child, sync::Arc};
 
 use smithay::{
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
@@ -35,6 +35,8 @@ pub struct AutoWC {
     pub overlay_windows: Vec<Window>,
     pub host_size: Size<i32, Physical>,
     pub pointer_in_viewport: bool,
+    pub child: Option<Child>,
+    pub exit_when_empty: bool,
 
     // Smithay State
     pub compositor_state: CompositorState,
@@ -109,6 +111,9 @@ impl AutoWC {
             overlay_windows: Vec::new(),
             host_size: virtual_size.to_physical(1),
             pointer_in_viewport: false,
+            child: None,
+            // TODO: Make lifecycle policy configurable.
+            exit_when_empty: true,
 
             compositor_state,
             xdg_shell_state,
@@ -240,6 +245,7 @@ impl AutoWC {
                 self.space.unmap_elem(&window);
             }
             self.promote_overlay();
+            self.maybe_exit_when_empty();
             return;
         }
 
@@ -258,8 +264,27 @@ impl AutoWC {
             self.focus_window(next_focus.as_ref());
         }
 
-        // TODO: Add the session lifecycle policy: exit when empty, stay alive, or
-        // exit with the launched child.
+        self.maybe_exit_when_empty();
+    }
+
+    pub fn check_child_exit(&mut self) {
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                eprintln!("AutoWC child exited with {status}");
+                self.child = None;
+                self.maybe_exit_when_empty();
+            }
+            Ok(None) => {}
+            Err(err) => {
+                eprintln!("AutoWC failed to poll child process: {err}");
+                self.child = None;
+                self.maybe_exit_when_empty();
+            }
+        }
     }
 
     pub fn handle_toplevel_commit(&mut self, surface: &WlSurface) {
@@ -315,6 +340,13 @@ impl AutoWC {
         }
 
         self.focus_window(Some(&window));
+    }
+
+    fn maybe_exit_when_empty(&mut self) {
+        if self.exit_when_empty && self.primary_window.is_none() && self.overlay_windows.is_empty()
+        {
+            self.loop_signal.stop();
+        }
     }
 
     fn center_overlay(&mut self, window: &Window) {

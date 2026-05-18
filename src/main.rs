@@ -7,6 +7,9 @@ mod state;
 mod stdin;
 mod winit;
 
+use std::{process::Child, time::Duration};
+
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
 pub use state::AutoWC;
 
@@ -26,8 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // than the host compositor
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
-    // Spawn the session client that will run under AutoWC.
-    spawn_client();
+    state.child = Some(spawn_client()?);
+    init_child_watcher(&mut event_loop)?;
 
     crate::stdin::init_stdin(&mut event_loop)?;
 
@@ -46,9 +49,25 @@ fn init_logging() {
     }
 }
 
-fn spawn_client() {
+fn spawn_client() -> Result<Child, Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let command = args.next().unwrap();
+    let Some(command) = args.next() else {
+        return Err("usage: autowc <command> [args...]".into());
+    };
 
-    std::process::Command::new(command).args(args).spawn().ok();
+    Ok(std::process::Command::new(command).args(args).spawn()?)
+}
+
+fn init_child_watcher(
+    event_loop: &mut EventLoop<AutoWC>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    event_loop.handle().insert_source(
+        Timer::from_duration(Duration::from_millis(100)),
+        |_, _, state| {
+            state.check_child_exit();
+            TimeoutAction::ToDuration(Duration::from_millis(100))
+        },
+    )?;
+
+    Ok(())
 }
