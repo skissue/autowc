@@ -167,7 +167,7 @@ fn text_to_autowc_lines(text: &str) -> Vec<String> {
         if !line.is_empty() {
             lines.push(format!("text {line}"));
         }
-        lines.push("key KEY_ENTER press".into());
+        lines.push("key Enter press".into());
         rest = tail;
     }
 
@@ -185,11 +185,11 @@ mod tests {
     #[test]
     fn serializes_default_key_press() {
         let command = AutomationCommand::Key {
-            key: "KEY_A".into(),
+            key: "KeyA".into(),
             state: KeyState::default(),
         };
 
-        assert_eq!(command.to_autowc_lines().unwrap(), ["key KEY_A press"]);
+        assert_eq!(command.to_autowc_lines().unwrap(), ["key KeyA press"]);
     }
 
     #[test]
@@ -222,14 +222,14 @@ mod tests {
 
         assert_eq!(
             command.to_autowc_lines().unwrap(),
-            ["text hello", "key KEY_ENTER press", "text world"]
+            ["text hello", "key Enter press", "text world"]
         );
     }
 
     #[test]
     fn rejects_bad_tokens() {
         assert!(AutomationCommand::Key {
-            key: "KEY_A KEY_B".into(),
+            key: "KeyA KeyB".into(),
             state: KeyState::Press,
         }
         .to_autowc_lines()

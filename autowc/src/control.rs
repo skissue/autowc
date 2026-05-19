@@ -76,7 +76,7 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
 
 pub fn text_to_key_events(text: &str) -> Result<Vec<(u32, PressAction)>, String> {
     let mut events = Vec::new();
-    let shift = key_to_code("KEY_LEFTSHIFT").unwrap();
+    let shift = key_to_code("ShiftLeft").unwrap();
 
     for ch in text.chars() {
         let Some((code, shifted)) = char_to_key(ch) else {
@@ -100,7 +100,7 @@ fn parse_key<'a>(
 ) -> Result<Option<ControlCommand>, String> {
     let key = parts
         .next()
-        .ok_or_else(|| "usage: key <KEY_NAME> [down|up|press]".to_string())?;
+        .ok_or_else(|| "usage: key <KeyboardEvent.code> [down|up|press]".to_string())?;
     let action = match parts.next() {
         Some(action) => parse_press_action(Some(action))?,
         None => PressAction::Press,
@@ -114,7 +114,7 @@ fn parse_key<'a>(
 fn parse_chord<'a>(parts: impl Iterator<Item = &'a str>) -> Result<Option<ControlCommand>, String> {
     let keys = parts.collect::<Vec<_>>();
     if keys.is_empty() {
-        return Err("usage: chord <KEY_NAME> [KEY_NAME ...]".into());
+        return Err("usage: chord <KeyboardEvent.code> [KeyboardEvent.code ...]".into());
     }
 
     let mut codes = Vec::with_capacity(keys.len());
@@ -248,54 +248,54 @@ fn ensure_no_extra<'a>(mut parts: impl Iterator<Item = &'a str>) -> Result<(), S
 fn char_to_key(ch: char) -> Option<(u32, bool)> {
     let (key, shifted) = match ch {
         'a'..='z' => {
-            return key_to_code(&format!("KEY_{}", ch.to_ascii_uppercase()))
+            return key_to_code(&format!("Key{}", ch.to_ascii_uppercase()))
                 .map(|code| (code, false))
         }
-        'A'..='Z' => return key_to_code(&format!("KEY_{ch}")).map(|code| (code, true)),
-        '0' => ("KEY_0", false),
-        '1' => ("KEY_1", false),
-        '2' => ("KEY_2", false),
-        '3' => ("KEY_3", false),
-        '4' => ("KEY_4", false),
-        '5' => ("KEY_5", false),
-        '6' => ("KEY_6", false),
-        '7' => ("KEY_7", false),
-        '8' => ("KEY_8", false),
-        '9' => ("KEY_9", false),
-        ' ' => ("KEY_SPACE", false),
-        '\n' => ("KEY_ENTER", false),
-        '-' => ("KEY_MINUS", false),
-        '_' => ("KEY_MINUS", true),
-        '=' => ("KEY_EQUAL", false),
-        '+' => ("KEY_EQUAL", true),
-        '[' => ("KEY_LEFTBRACE", false),
-        '{' => ("KEY_LEFTBRACE", true),
-        ']' => ("KEY_RIGHTBRACE", false),
-        '}' => ("KEY_RIGHTBRACE", true),
-        '\\' => ("KEY_BACKSLASH", false),
-        '|' => ("KEY_BACKSLASH", true),
-        ';' => ("KEY_SEMICOLON", false),
-        ':' => ("KEY_SEMICOLON", true),
-        '\'' => ("KEY_APOSTROPHE", false),
-        '"' => ("KEY_APOSTROPHE", true),
-        '`' => ("KEY_GRAVE", false),
-        '~' => ("KEY_GRAVE", true),
-        ',' => ("KEY_COMMA", false),
-        '<' => ("KEY_COMMA", true),
-        '.' => ("KEY_DOT", false),
-        '>' => ("KEY_DOT", true),
-        '/' => ("KEY_SLASH", false),
-        '?' => ("KEY_SLASH", true),
-        '!' => ("KEY_1", true),
-        '@' => ("KEY_2", true),
-        '#' => ("KEY_3", true),
-        '$' => ("KEY_4", true),
-        '%' => ("KEY_5", true),
-        '^' => ("KEY_6", true),
-        '&' => ("KEY_7", true),
-        '*' => ("KEY_8", true),
-        '(' => ("KEY_9", true),
-        ')' => ("KEY_0", true),
+        'A'..='Z' => return key_to_code(&format!("Key{ch}")).map(|code| (code, true)),
+        '0' => ("Digit0", false),
+        '1' => ("Digit1", false),
+        '2' => ("Digit2", false),
+        '3' => ("Digit3", false),
+        '4' => ("Digit4", false),
+        '5' => ("Digit5", false),
+        '6' => ("Digit6", false),
+        '7' => ("Digit7", false),
+        '8' => ("Digit8", false),
+        '9' => ("Digit9", false),
+        ' ' => ("Space", false),
+        '\n' => ("Enter", false),
+        '-' => ("Minus", false),
+        '_' => ("Minus", true),
+        '=' => ("Equal", false),
+        '+' => ("Equal", true),
+        '[' => ("BracketLeft", false),
+        '{' => ("BracketLeft", true),
+        ']' => ("BracketRight", false),
+        '}' => ("BracketRight", true),
+        '\\' => ("Backslash", false),
+        '|' => ("Backslash", true),
+        ';' => ("Semicolon", false),
+        ':' => ("Semicolon", true),
+        '\'' => ("Quote", false),
+        '"' => ("Quote", true),
+        '`' => ("Backquote", false),
+        '~' => ("Backquote", true),
+        ',' => ("Comma", false),
+        '<' => ("Comma", true),
+        '.' => ("Period", false),
+        '>' => ("Period", true),
+        '/' => ("Slash", false),
+        '?' => ("Slash", true),
+        '!' => ("Digit1", true),
+        '@' => ("Digit2", true),
+        '#' => ("Digit3", true),
+        '$' => ("Digit4", true),
+        '%' => ("Digit5", true),
+        '^' => ("Digit6", true),
+        '&' => ("Digit7", true),
+        '*' => ("Digit8", true),
+        '(' => ("Digit9", true),
+        ')' => ("Digit0", true),
         _ => return None,
     };
 
@@ -309,16 +309,16 @@ mod tests {
     #[test]
     fn parses_key_command() {
         assert_eq!(
-            parse_control_command("key KEY_A").unwrap(),
+            parse_control_command("key KeyA").unwrap(),
             Some(ControlCommand::Key {
-                code: key_to_code("KEY_A").unwrap(),
+                code: key_to_code("KeyA").unwrap(),
                 action: PressAction::Press,
             })
         );
         assert_eq!(
-            parse_control_command("key KEY_A down").unwrap(),
+            parse_control_command("key KeyA down").unwrap(),
             Some(ControlCommand::Key {
-                code: key_to_code("KEY_A").unwrap(),
+                code: key_to_code("KeyA").unwrap(),
                 action: PressAction::Down,
             })
         );
@@ -327,16 +327,16 @@ mod tests {
     #[test]
     fn parses_chord() {
         assert_eq!(
-            parse_control_command("chord KEY_LEFTCTRL KEY_L").unwrap(),
+            parse_control_command("chord ControlLeft KeyL").unwrap(),
             Some(ControlCommand::Chord {
                 codes: vec![
-                    key_to_code("KEY_LEFTCTRL").unwrap(),
-                    key_to_code("KEY_L").unwrap(),
+                    key_to_code("ControlLeft").unwrap(),
+                    key_to_code("KeyL").unwrap(),
                 ],
             })
         );
         assert!(parse_control_command("chord").is_err());
-        assert!(parse_control_command("chord KEY_NOPE").is_err());
+        assert!(parse_control_command("chord KeyNope").is_err());
     }
 
     #[test]
@@ -432,9 +432,9 @@ mod tests {
 
     #[test]
     fn rejects_invalid_input() {
-        assert!(parse_control_command("KEY_A").is_err());
-        assert!(parse_control_command("key KEY_NOPE press").is_err());
-        assert!(parse_control_command("key KEY_A tap").is_err());
+        assert!(parse_control_command("KeyA").is_err());
+        assert!(parse_control_command("key KeyNope press").is_err());
+        assert!(parse_control_command("key KeyA tap").is_err());
         assert!(parse_control_command("pointer move 10 20").is_err());
         assert!(parse_control_command("mouse move 10").is_err());
         assert!(parse_control_command("mouse button tap").is_err());
