@@ -41,6 +41,7 @@ pub struct AutoWC {
     pub space: Space<Window>,
     pub loop_signal: LoopSignal,
     pub virtual_size: Size<i32, Logical>,
+    pub dynamic_resize: bool,
     pub primary_window: Option<Window>,
     pub overlay_windows: Vec<Window>,
     pub host_size: Size<i32, Physical>,
@@ -75,6 +76,7 @@ impl AutoWC {
         event_loop: &mut EventLoop<Self>,
         display: Display<Self>,
         virtual_size: Size<i32, Logical>,
+        dynamic_resize: bool,
         stay_alive: bool,
         timing: TimingOptions,
         protocol: Protocol,
@@ -131,6 +133,7 @@ impl AutoWC {
             loop_signal,
             socket_name,
             virtual_size,
+            dynamic_resize,
             primary_window: None,
             overlay_windows: Vec::new(),
             host_size: virtual_size.to_physical(1),
@@ -216,6 +219,33 @@ impl AutoWC {
 
     pub fn set_host_size(&mut self, size: Size<i32, Physical>) {
         self.host_size = size;
+    }
+
+    pub fn resize_virtual_output(&mut self, size: Size<i32, Logical>) {
+        if size.w <= 0 || size.h <= 0 || size == self.virtual_size {
+            return;
+        }
+
+        self.virtual_size = size;
+        self.clear_command_queue();
+
+        if let Some(primary_window) = self.primary_window.as_ref() {
+            self.configure_primary(primary_window);
+            let toplevel = primary_window.toplevel().unwrap();
+            if toplevel.is_initial_configure_sent() {
+                toplevel.send_pending_configure();
+            }
+        }
+
+        let overlays = self.overlay_windows.clone();
+        for overlay in overlays {
+            self.center_overlay(&overlay);
+        }
+    }
+
+    pub fn clear_command_queue(&mut self) {
+        self.control_queue.clear();
+        self.next_control_action_at = None;
     }
 
     pub fn presentation_viewport(&self) -> Rectangle<i32, Physical> {

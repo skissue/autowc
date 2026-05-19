@@ -21,7 +21,7 @@ use smithay::{
         calloop::EventLoop,
         winit::{dpi::LogicalSize, window::Window as WinitWindow},
     },
-    utils::{Rectangle, Transform},
+    utils::{Logical, Physical, Rectangle, Size, Transform},
 };
 
 use crate::{screenshot, AutoWC};
@@ -30,8 +30,6 @@ pub fn init_winit(
     event_loop: &mut EventLoop<AutoWC>,
     state: &mut AutoWC,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // TODO: Make the initial host window size configurable. Defaulting to
-    // the virtual output size keeps early manual testing predictable.
     let window_attributes = WinitWindow::default_attributes()
         .with_inner_size(LogicalSize::new(
             state.virtual_size.w as f64,
@@ -41,11 +39,9 @@ pub fn init_winit(
         .with_visible(true);
     let (mut backend, winit) = winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
     state.set_host_size(backend.window_size());
-
-    let mode = Mode {
-        size: state.virtual_size.to_physical(1),
-        refresh: 60_000,
-    };
+    if state.dynamic_resize {
+        state.resize_virtual_output(logical_size_from_host(backend.window_size()));
+    }
 
     let output = Output::new(
         "winit".to_string(),
@@ -58,13 +54,7 @@ pub fn init_winit(
         },
     );
     let _global = output.create_global::<AutoWC>(&state.display_handle);
-    output.change_current_state(
-        Some(mode),
-        Some(Transform::Flipped180),
-        None,
-        Some((0, 0).into()),
-    );
-    output.set_preferred(mode);
+    update_output_mode(&output, state.virtual_size);
 
     state.space.map_output(&output, (0, 0));
 
@@ -77,15 +67,13 @@ pub fn init_winit(
         .insert_source(winit, move |event, _, state| {
             match event {
                 WinitEvent::Resized { size, .. } => {
-                    state.set_host_size(size);
-                    damage_tracker = OutputDamageTracker::new(size, 1.0, Transform::Flipped180);
+                    handle_host_resize(state, &output, &mut damage_tracker, size);
                 }
                 WinitEvent::Input(event) => state.process_input_event(event),
                 WinitEvent::Redraw => {
                     let size = backend.window_size();
                     if size != state.host_size {
-                        state.set_host_size(size);
-                        damage_tracker = OutputDamageTracker::new(size, 1.0, Transform::Flipped180);
+                        handle_host_resize(state, &output, &mut damage_tracker, size);
                     }
                     let damage = Rectangle::from_size(size);
 
@@ -231,4 +219,36 @@ pub fn init_winit(
 struct VirtualFramebuffer {
     texture: GlesTexture,
     damage_tracker: OutputDamageTracker,
+}
+
+fn handle_host_resize(
+    state: &mut AutoWC,
+    output: &Output,
+    damage_tracker: &mut OutputDamageTracker,
+    size: Size<i32, Physical>,
+) {
+    state.set_host_size(size);
+    if state.dynamic_resize {
+        state.resize_virtual_output(logical_size_from_host(size));
+        update_output_mode(output, state.virtual_size);
+    }
+    *damage_tracker = OutputDamageTracker::new(size, 1.0, Transform::Flipped180);
+}
+
+fn logical_size_from_host(size: Size<i32, Physical>) -> Size<i32, Logical> {
+    Size::from((size.w, size.h))
+}
+
+fn update_output_mode(output: &Output, size: Size<i32, Logical>) {
+    let mode = Mode {
+        size: size.to_physical(1),
+        refresh: 60_000,
+    };
+    output.change_current_state(
+        Some(mode),
+        Some(Transform::Flipped180),
+        None,
+        Some((0, 0).into()),
+    );
+    output.set_preferred(mode);
 }
