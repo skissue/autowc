@@ -565,6 +565,33 @@ mod tests {
     }
 
     #[test]
+    fn plain_text_does_not_unescape_backslash_sequences() {
+        assert_eq!(
+            parse_control_command(r"text \n").unwrap(),
+            Some(ControlCommand::Text(r"\n".to_string()))
+        );
+        assert_eq!(
+            text_to_key_events(r"\n").unwrap(),
+            [
+                (key_to_code("Backslash").unwrap(), PressAction::Press),
+                (key_to_code("KeyN").unwrap(), PressAction::Press),
+            ]
+        );
+    }
+
+    #[test]
+    fn json_text_unescapes_backslash_sequences() {
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"text","text":"\n"}"#).unwrap(),
+            ControlCommand::Text("\n".to_string())
+        );
+        assert_eq!(
+            text_to_key_events("\n").unwrap(),
+            [(key_to_code("Enter").unwrap(), PressAction::Press)]
+        );
+    }
+
+    #[test]
     fn rejects_invalid_input() {
         assert!(parse_control_command("KeyA").is_err());
         assert!(parse_control_command("key KeyNope press").is_err());
