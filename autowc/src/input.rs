@@ -21,6 +21,7 @@ pub const CONTROL_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const KEY_EVENT_INTERVAL: Duration = Duration::from_millis(20);
 pub const DEFAULT_CHORD_KEY_INTERVAL: Duration = Duration::from_millis(10);
 const CHORD_HOLD_DURATION: Duration = Duration::from_millis(75);
+pub const DEFAULT_COMMAND_INTERVAL: Duration = Duration::ZERO;
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
@@ -112,6 +113,11 @@ impl AutoWC {
             ControlCommand::Quit => {
                 self.control_queue.push_back(QueuedControlAction::Quit);
             }
+        }
+
+        if !self.command_interval.is_zero() {
+            self.control_queue
+                .push_back(QueuedControlAction::Delay(self.command_interval));
         }
 
         Ok(())

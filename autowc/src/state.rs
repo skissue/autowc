@@ -49,6 +49,7 @@ pub struct AutoWC {
     pub control_queue: VecDeque<QueuedControlAction>,
     pub next_control_action_at: Option<Instant>,
     pub chord_key_interval: Duration,
+    pub command_interval: Duration,
     screenshot_counter: u64,
 
     // Smithay State
@@ -132,6 +133,7 @@ impl AutoWC {
             control_queue: VecDeque::new(),
             next_control_action_at: None,
             chord_key_interval: crate::input::DEFAULT_CHORD_KEY_INTERVAL,
+            command_interval: crate::input::DEFAULT_COMMAND_INTERVAL,
             screenshot_counter: 0,
 
             compositor_state,
