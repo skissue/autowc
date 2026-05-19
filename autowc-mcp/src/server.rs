@@ -28,7 +28,7 @@ Typical flow:
 3. screenshot observes the current framebuffer without sending input.
 4. close stops the compositor process.
 
-Mouse coordinates are virtual-display pixels with the origin at the top-left of the AutoWC display. The launch width and height set that virtual display size.
+Mouse coordinates are virtual-display pixels with the origin at the top-left of the AutoWC display. Launch defaults to dynamic resizing, where the virtual display follows the host window size. Use the launch defaults unless you specifically need a fixed-size output for stable screenshots or coordinates; for fixed output, provide both width and height.
 
 Keyboard commands use W3C KeyboardEvent.code physical key names, such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5.
 
@@ -75,8 +75,9 @@ impl AutoWcMcpServer {
             .launch(SessionConfig {
                 autowc_binary: self.autowc_binary.clone(),
                 command: params.command,
-                width: params.width.unwrap_or(1280),
-                height: params.height.unwrap_or(720),
+                width: params.width,
+                height: params.height,
+                dynamic_resize: params.dynamic_resize.unwrap_or(false),
                 stay_alive: params.stay_alive.unwrap_or(false),
                 key_event_interval_ms: params.key_event_interval_ms,
                 chord_key_interval_ms: params.chord_key_interval_ms,
@@ -167,10 +168,18 @@ pub struct LaunchParams {
         description = "Command to run inside AutoWC as argv: the first item is the executable, and the remaining items are its arguments."
     )]
     pub command: Vec<String>,
-    #[schemars(description = "Virtual display width in pixels. Defaults to 1280.")]
+    #[schemars(
+        description = "Fixed virtual display width in pixels. Omit width and height for the recommended dynamic-size default. If provided, height must also be provided."
+    )]
     pub width: Option<u32>,
-    #[schemars(description = "Virtual display height in pixels. Defaults to 720.")]
+    #[schemars(
+        description = "Fixed virtual display height in pixels. Omit width and height for the recommended dynamic-size default. If provided, width must also be provided."
+    )]
     pub height: Option<u32>,
+    #[schemars(
+        description = "Explicitly request dynamic resizing, where the virtual display follows the host window size. Defaults to dynamic when width and height are omitted, and cannot be combined with width or height."
+    )]
+    pub dynamic_resize: Option<bool>,
     #[schemars(
         description = "When true, keep the AutoWC session running after all client windows exit. Defaults to false."
     )]
@@ -239,6 +248,7 @@ fn metadata_result(metadata: SessionMetadata) -> CallToolResult {
         "session_id": metadata.session_id,
         "width": metadata.width,
         "height": metadata.height,
+        "dynamic_resize": metadata.dynamic_resize,
         "command": metadata.command,
     }))
 }
@@ -331,6 +341,8 @@ mod tests {
     #[test]
     fn server_instructions_are_the_canonical_usage_guide() {
         assert!(SERVER_INSTRUCTIONS.contains("Typical flow"));
+        assert!(SERVER_INSTRUCTIONS.contains("Launch defaults to dynamic resizing"));
+        assert!(SERVER_INSTRUCTIONS.contains("Use the launch defaults"));
         assert!(SERVER_INSTRUCTIONS.contains("return_screenshot"));
         assert!(SERVER_INSTRUCTIONS.contains("W3C KeyboardEvent.code"));
         assert!(!SERVER_INSTRUCTIONS.contains("KEY_*"));
@@ -343,8 +355,9 @@ mod tests {
         let schema = serde_json::to_string(&schema).unwrap();
 
         assert!(schema.contains("first item is the executable"));
-        assert!(schema.contains("Defaults to 1280"));
-        assert!(schema.contains("Defaults to 720"));
+        assert!(schema.contains("recommended dynamic-size default"));
+        assert!(schema.contains("dynamic resizing"));
+        assert!(schema.contains("cannot be combined with width or height"));
         assert!(schema.contains("stay"));
         assert!(schema.contains("Delay in milliseconds"));
     }
