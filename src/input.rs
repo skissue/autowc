@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use smithay::{
     backend::input::{
@@ -14,49 +14,117 @@ use smithay::{
 
 use crate::{
     control::{text_to_key_events, ControlCommand},
-    state::AutoWC,
+    state::{AutoWC, QueuedControlAction},
 };
+
+pub const CONTROL_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
         match command {
             ControlCommand::Key { code, action } => {
                 for state in action.key_states() {
-                    self.process_virtual_input_event(code, *state);
+                    self.control_queue.push_back(QueuedControlAction::Key {
+                        code,
+                        state: *state,
+                    });
                 }
             }
             ControlCommand::Text(text) => {
                 for (code, action) in text_to_key_events(&text)? {
                     for state in action.key_states() {
-                        self.process_virtual_input_event(code, *state);
+                        self.control_queue.push_back(QueuedControlAction::Key {
+                            code,
+                            state: *state,
+                        });
                     }
                 }
             }
             ControlCommand::PointerMove { x, y } => {
-                self.process_virtual_pointer_motion((x, y).into());
+                self.control_queue
+                    .push_back(QueuedControlAction::PointerMove { x, y });
             }
             ControlCommand::PointerButton { button, action } => {
                 for state in action.button_states() {
-                    self.process_virtual_pointer_button(button, *state);
+                    self.control_queue
+                        .push_back(QueuedControlAction::PointerButton {
+                            button,
+                            state: *state,
+                        });
                 }
             }
             ControlCommand::Click { x, y, button } => {
-                self.process_virtual_pointer_motion((x, y).into());
-                self.process_virtual_pointer_button(button, ButtonState::Pressed);
-                self.process_virtual_pointer_button(button, ButtonState::Released);
+                self.control_queue
+                    .push_back(QueuedControlAction::PointerMove { x, y });
+                self.control_queue
+                    .push_back(QueuedControlAction::PointerButton {
+                        button,
+                        state: ButtonState::Pressed,
+                    });
+                self.control_queue
+                    .push_back(QueuedControlAction::PointerButton {
+                        button,
+                        state: ButtonState::Released,
+                    });
             }
             ControlCommand::Scroll { dx, dy } => {
-                self.process_virtual_scroll(dx, dy);
+                self.control_queue
+                    .push_back(QueuedControlAction::Scroll { dx, dy });
             }
             ControlCommand::Screenshot { path } => {
-                self.queue_screenshot(path);
+                self.control_queue
+                    .push_back(QueuedControlAction::Screenshot { path });
+            }
+            ControlCommand::Sleep { duration_ms } => {
+                self.control_queue
+                    .push_back(QueuedControlAction::Delay(Duration::from_millis(
+                        duration_ms,
+                    )));
             }
             ControlCommand::Quit => {
-                self.loop_signal.stop();
+                self.control_queue.push_back(QueuedControlAction::Quit);
             }
         }
 
         Ok(())
+    }
+
+    pub fn process_pending_control_actions(&mut self) {
+        let now = Instant::now();
+        if self
+            .next_control_action_at
+            .is_some_and(|instant| instant > now)
+        {
+            return;
+        }
+        self.next_control_action_at = None;
+
+        while let Some(action) = self.control_queue.pop_front() {
+            match action {
+                QueuedControlAction::Key { code, state } => {
+                    self.process_virtual_input_event(code, state);
+                }
+                QueuedControlAction::PointerMove { x, y } => {
+                    self.process_virtual_pointer_motion((x, y).into());
+                }
+                QueuedControlAction::PointerButton { button, state } => {
+                    self.process_virtual_pointer_button(button, state);
+                }
+                QueuedControlAction::Scroll { dx, dy } => {
+                    self.process_virtual_scroll(dx, dy);
+                }
+                QueuedControlAction::Screenshot { path } => {
+                    self.queue_screenshot(path);
+                }
+                QueuedControlAction::Quit => {
+                    self.loop_signal.stop();
+                }
+                QueuedControlAction::Delay(duration) => {
+                    self.next_control_action_at = Some(Instant::now() + duration);
+                    return;
+                }
+            }
+        }
     }
 
     pub fn process_virtual_input_event(&mut self, code: u32, state: KeyState) {

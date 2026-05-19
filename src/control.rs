@@ -13,6 +13,7 @@ pub enum ControlCommand {
     Click { x: f64, y: f64, button: u32 },
     Scroll { dx: f64, dy: f64 },
     Screenshot { path: Option<PathBuf> },
+    Sleep { duration_ms: u64 },
     Quit,
 }
 
@@ -66,6 +67,7 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
         "click" => parse_click(parts),
         "scroll" => parse_scroll(parts),
         "screenshot" => parse_screenshot(parts),
+        "sleep" => parse_sleep(parts),
         _ => Err(format!("unknown command: {command}")),
     }
 }
@@ -172,6 +174,19 @@ fn parse_screenshot<'a>(
     ensure_no_extra(parts)?;
 
     Ok(Some(ControlCommand::Screenshot { path }))
+}
+
+fn parse_sleep<'a>(
+    mut parts: impl Iterator<Item = &'a str>,
+) -> Result<Option<ControlCommand>, String> {
+    let duration_ms = parts
+        .next()
+        .ok_or_else(|| "usage: sleep <ms>".to_string())?
+        .parse::<u64>()
+        .map_err(|_| "invalid sleep duration".to_string())?;
+    ensure_no_extra(parts)?;
+
+    Ok(Some(ControlCommand::Sleep { duration_ms }))
 }
 
 fn parse_press_action(value: Option<&str>) -> Result<PressAction, String> {
@@ -364,6 +379,16 @@ mod tests {
                 path: Some(PathBuf::from("/tmp/autowc.png")),
             })
         );
+    }
+
+    #[test]
+    fn parses_sleep() {
+        assert_eq!(
+            parse_control_command("sleep 250").unwrap(),
+            Some(ControlCommand::Sleep { duration_ms: 250 })
+        );
+        assert!(parse_control_command("sleep 1.5").is_err());
+        assert!(parse_control_command("sleep -1").is_err());
     }
 
     #[test]

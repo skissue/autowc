@@ -1,6 +1,14 @@
-use std::{collections::VecDeque, ffi::OsString, path::PathBuf, process::Child, sync::Arc};
+use std::{
+    collections::VecDeque,
+    ffi::OsString,
+    path::PathBuf,
+    process::Child,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use smithay::{
+    backend::input::{ButtonState, KeyState},
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
     input::{Seat, SeatState},
     reexports::{
@@ -38,6 +46,8 @@ pub struct AutoWC {
     pub child: Option<Child>,
     pub stay_alive: bool,
     pub pending_screenshots: VecDeque<ScreenshotRequest>,
+    pub control_queue: VecDeque<QueuedControlAction>,
+    pub next_control_action_at: Option<Instant>,
     screenshot_counter: u64,
 
     // Smithay State
@@ -118,6 +128,8 @@ impl AutoWC {
             child: None,
             stay_alive,
             pending_screenshots: VecDeque::new(),
+            control_queue: VecDeque::new(),
+            next_control_action_at: None,
             screenshot_counter: 0,
 
             compositor_state,
@@ -405,6 +417,16 @@ pub struct ClientState {
 
 pub struct ScreenshotRequest {
     pub path: PathBuf,
+}
+
+pub enum QueuedControlAction {
+    Key { code: u32, state: KeyState },
+    PointerMove { x: f64, y: f64 },
+    PointerButton { button: u32, state: ButtonState },
+    Scroll { dx: f64, dy: f64 },
+    Screenshot { path: Option<PathBuf> },
+    Quit,
+    Delay(Duration),
 }
 
 impl ClientData for ClientState {

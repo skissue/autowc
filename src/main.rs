@@ -62,6 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     state.child = Some(spawn_client(&cli.command)?);
     init_child_watcher(&mut event_loop)?;
+    init_control_scheduler(&mut event_loop)?;
 
     crate::stdin::init_stdin(&mut event_loop)?;
 
@@ -108,6 +109,20 @@ fn init_child_watcher(
         |_, _, state| {
             state.check_child_exit();
             TimeoutAction::ToDuration(Duration::from_millis(100))
+        },
+    )?;
+
+    Ok(())
+}
+
+fn init_control_scheduler(
+    event_loop: &mut EventLoop<AutoWC>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    event_loop.handle().insert_source(
+        Timer::from_duration(crate::input::CONTROL_QUEUE_POLL_INTERVAL),
+        |_, _, state| {
+            state.process_pending_control_actions();
+            TimeoutAction::ToDuration(crate::input::CONTROL_QUEUE_POLL_INTERVAL)
         },
     )?;
 
