@@ -36,7 +36,7 @@ pub struct AutoWC {
     pub host_size: Size<i32, Physical>,
     pub pointer_in_viewport: bool,
     pub child: Option<Child>,
-    pub exit_when_empty: bool,
+    pub stay_alive: bool,
 
     // Smithay State
     pub compositor_state: CompositorState,
@@ -55,6 +55,7 @@ impl AutoWC {
         event_loop: &mut EventLoop<Self>,
         display: Display<Self>,
         virtual_size: Size<i32, Logical>,
+        stay_alive: bool,
     ) -> Self {
         let start_time = std::time::Instant::now();
 
@@ -113,8 +114,7 @@ impl AutoWC {
             host_size: virtual_size.to_physical(1),
             pointer_in_viewport: false,
             child: None,
-            // TODO: Make lifecycle policy configurable.
-            exit_when_empty: true,
+            stay_alive,
 
             compositor_state,
             xdg_shell_state,
@@ -344,8 +344,7 @@ impl AutoWC {
     }
 
     fn maybe_exit_when_empty(&mut self) {
-        if self.exit_when_empty && self.primary_window.is_none() && self.overlay_windows.is_empty()
-        {
+        if !self.stay_alive && self.primary_window.is_none() && self.overlay_windows.is_empty() {
             self.loop_signal.stop();
         }
     }

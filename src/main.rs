@@ -27,6 +27,10 @@ struct Cli {
     #[arg(long, default_value_t = 720)]
     height: i32,
 
+    /// Keep AutoWC running after all client windows close.
+    #[arg(long)]
+    stay_alive: bool,
+
     /// Command to launch inside AutoWC, followed by its arguments.
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     command: Vec<OsString>,
@@ -41,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let display: Display<AutoWC> = Display::new()?;
 
-    let mut state = AutoWC::new(&mut event_loop, display, virtual_size);
+    let mut state = AutoWC::new(&mut event_loop, display, virtual_size, cli.stay_alive);
 
     // Open a Wayland/X11 window for our nested compositor
     crate::winit::init_winit(&mut event_loop, &mut state)?;
