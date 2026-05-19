@@ -17,6 +17,8 @@ use crate::{
     },
 };
 
+const DEFAULT_SCREENSHOT_DELAY_MS: u64 = 500;
+
 const SERVER_INSTRUCTIONS: &str = "\
 AutoWC runs applications inside nested compositor sessions for GUI automation.
 
@@ -99,9 +101,17 @@ impl AutoWcMcpServer {
         Parameters(params): Parameters<RunParams>,
     ) -> Result<CallToolResult, String> {
         let return_screenshot = params.return_screenshot.unwrap_or(true);
+        let screenshot_delay_ms = params
+            .screenshot_delay_ms
+            .unwrap_or(DEFAULT_SCREENSHOT_DELAY_MS);
         let outcome = match self
             .sessions
-            .run(&params.session_id, &params.commands, return_screenshot)
+            .run(
+                &params.session_id,
+                &params.commands,
+                return_screenshot,
+                screenshot_delay_ms,
+            )
             .await
         {
             Ok(outcome) => outcome,
@@ -195,6 +205,10 @@ pub struct RunParams {
         description = "Whether to return an inline screenshot after the batch completes. Defaults to true."
     )]
     pub return_screenshot: Option<bool>,
+    #[schemars(
+        description = "Delay in milliseconds after all commands execute before the final screenshot is captured. Defaults to 500."
+    )]
+    pub screenshot_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -343,6 +357,7 @@ mod tests {
         assert!(schema.contains("Ordered automation command batch"));
         assert!(schema.contains("key, chord, text"));
         assert!(schema.contains("Defaults to true"));
+        assert!(schema.contains("Defaults to 500"));
     }
 
     #[test]

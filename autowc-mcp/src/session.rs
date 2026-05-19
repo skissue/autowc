@@ -142,10 +142,13 @@ impl SessionManager {
         session_id: &str,
         commands: &[AutomationCommand],
         return_screenshot: bool,
+        screenshot_delay_ms: u64,
     ) -> Result<RunOutcome, RunError> {
         let session = self.get_session(session_id).await.map_err(RunError::new)?;
         let mut session = session.lock().await;
-        session.run(commands, return_screenshot).await
+        session
+            .run(commands, return_screenshot, screenshot_delay_ms)
+            .await
     }
 
     pub async fn screenshot(
@@ -226,6 +229,7 @@ impl Session {
         &mut self,
         commands: &[AutomationCommand],
         return_screenshot: bool,
+        screenshot_delay_ms: u64,
     ) -> Result<RunOutcome, RunError> {
         self.ensure_running().await.map_err(RunError::new)?;
         let mut commands_executed = 0;
@@ -247,6 +251,10 @@ impl Session {
             }
 
             commands_executed += 1;
+        }
+
+        if screenshot_delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(screenshot_delay_ms)).await;
         }
 
         // Use a screenshot as a protocol sync point even when the caller does
