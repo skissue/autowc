@@ -60,6 +60,10 @@ impl AutoWcMcpServer {
                 width: params.width.unwrap_or(1280),
                 height: params.height.unwrap_or(720),
                 stay_alive: params.stay_alive.unwrap_or(false),
+                key_event_interval_ms: params.key_event_interval_ms,
+                chord_key_interval_ms: params.chord_key_interval_ms,
+                chord_hold_ms: params.chord_hold_ms,
+                command_interval_ms: params.command_interval_ms,
             })
             .await
         {
@@ -134,6 +138,10 @@ pub struct LaunchParams {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub stay_alive: Option<bool>,
+    pub key_event_interval_ms: Option<u64>,
+    pub chord_key_interval_ms: Option<u64>,
+    pub chord_hold_ms: Option<u64>,
+    pub command_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

@@ -27,6 +27,10 @@ pub struct SessionConfig {
     pub width: u32,
     pub height: u32,
     pub stay_alive: bool,
+    pub key_event_interval_ms: Option<u64>,
+    pub chord_key_interval_ms: Option<u64>,
+    pub chord_hold_ms: Option<u64>,
+    pub command_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,19 +172,9 @@ struct Session {
 
 impl Session {
     async fn spawn(config: SessionConfig) -> Result<Self, SessionError> {
-        let mut command = Command::new(config.autowc_binary);
+        let mut command = Command::new(&config.autowc_binary);
         command
-            .arg("--width")
-            .arg(config.width.to_string())
-            .arg("--height")
-            .arg(config.height.to_string());
-
-        if config.stay_alive {
-            command.arg("--stay-alive");
-        }
-
-        command
-            .args(config.command)
+            .args(autowc_args(&config))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -328,6 +322,44 @@ impl Session {
     }
 }
 
+fn autowc_args(config: &SessionConfig) -> Vec<String> {
+    let mut args = vec![
+        "--width".into(),
+        config.width.to_string(),
+        "--height".into(),
+        config.height.to_string(),
+    ];
+
+    if config.stay_alive {
+        args.push("--stay-alive".into());
+    }
+    push_optional_ms_arg(
+        &mut args,
+        "--key-event-interval-ms",
+        config.key_event_interval_ms,
+    );
+    push_optional_ms_arg(
+        &mut args,
+        "--chord-key-interval-ms",
+        config.chord_key_interval_ms,
+    );
+    push_optional_ms_arg(&mut args, "--chord-hold-ms", config.chord_hold_ms);
+    push_optional_ms_arg(
+        &mut args,
+        "--command-interval-ms",
+        config.command_interval_ms,
+    );
+    args.extend(config.command.clone());
+    args
+}
+
+fn push_optional_ms_arg(args: &mut Vec<String>, flag: &str, value: Option<u64>) {
+    if let Some(value) = value {
+        args.push(flag.into());
+        args.push(value.to_string());
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SharedStderr {
     lines: Arc<StdMutex<std::collections::VecDeque<String>>>,
@@ -403,6 +435,61 @@ mod tests {
         assert_eq!(
             parse_response("error unsupported key").unwrap_err(),
             "unsupported key"
+        );
+    }
+
+    #[test]
+    fn builds_launch_args_with_timing_options() {
+        let args = autowc_args(&SessionConfig {
+            autowc_binary: "autowc".into(),
+            command: vec!["gtk4-demo".into()],
+            width: 800,
+            height: 600,
+            stay_alive: true,
+            key_event_interval_ms: Some(25),
+            chord_key_interval_ms: Some(10),
+            chord_hold_ms: Some(90),
+            command_interval_ms: Some(5),
+        });
+
+        assert_eq!(
+            args,
+            [
+                "--width",
+                "800",
+                "--height",
+                "600",
+                "--stay-alive",
+                "--key-event-interval-ms",
+                "25",
+                "--chord-key-interval-ms",
+                "10",
+                "--chord-hold-ms",
+                "90",
+                "--command-interval-ms",
+                "5",
+                "gtk4-demo",
+            ]
+        );
+    }
+
+    #[test]
+    fn omits_unset_launch_timing_options() {
+        let args = autowc_args(&SessionConfig {
+            autowc_binary: "autowc".into(),
+            command: vec!["foot".into()],
+            width: 1280,
+            height: 720,
+            stay_alive: false,
+            key_event_interval_ms: None,
+            chord_key_interval_ms: None,
+            chord_hold_ms: None,
+            command_interval_ms: None,
+        });
+
+        assert_eq!(
+            args,
+            ["--width", "1280", "--height", "720", "foot"]
         );
     }
 }
