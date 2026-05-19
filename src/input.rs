@@ -19,6 +19,7 @@ use crate::{
 
 pub const CONTROL_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const CHORD_HOLD_DURATION: Duration = Duration::from_millis(75);
+const TEXT_KEY_INTERVAL: Duration = Duration::from_millis(20);
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
@@ -54,6 +55,8 @@ impl AutoWC {
                             code,
                             state: *state,
                         });
+                        self.control_queue
+                            .push_back(QueuedControlAction::Delay(TEXT_KEY_INTERVAL));
                     }
                 }
             }
