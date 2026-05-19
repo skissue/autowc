@@ -306,7 +306,11 @@ impl AutoWC {
     pub fn configure_primary(&self, window: &Window) {
         let toplevel = window.toplevel().unwrap();
         toplevel.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Fullscreen);
+            state.states.unset(xdg_toplevel::State::Fullscreen);
+            state.states.set(xdg_toplevel::State::TiledLeft);
+            state.states.set(xdg_toplevel::State::TiledRight);
+            state.states.set(xdg_toplevel::State::TiledTop);
+            state.states.set(xdg_toplevel::State::TiledBottom);
             state.size = Some(self.virtual_size);
         });
         window.set_activated(true);
@@ -316,6 +320,10 @@ impl AutoWC {
         let toplevel = window.toplevel().unwrap();
         toplevel.with_pending_state(|state| {
             state.states.unset(xdg_toplevel::State::Fullscreen);
+            state.states.unset(xdg_toplevel::State::TiledLeft);
+            state.states.unset(xdg_toplevel::State::TiledRight);
+            state.states.unset(xdg_toplevel::State::TiledTop);
+            state.states.unset(xdg_toplevel::State::TiledBottom);
             state.size = None;
         });
         window.set_activated(true);
