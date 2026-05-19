@@ -8,7 +8,11 @@ mod state;
 mod stdin;
 mod winit;
 
-use std::{ffi::OsString, process::Child, time::Duration};
+use std::{
+    ffi::OsString,
+    process::{Child, Command, Stdio},
+    time::Duration,
+};
 
 use clap::Parser;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
@@ -87,7 +91,11 @@ fn spawn_client(command: &[OsString]) -> Result<Child, Box<dyn std::error::Error
         return Err("missing launch command".into());
     };
 
-    Ok(std::process::Command::new(program).args(args).spawn()?)
+    Ok(Command::new(program)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?)
 }
 
 fn init_child_watcher(
