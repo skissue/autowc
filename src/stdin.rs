@@ -3,7 +3,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::{control::parse_control_command, AutoWC, EventLoop};
+use crate::{control::parse_control_command, protocol, AutoWC, EventLoop};
 use smithay::reexports::calloop::{self, channel::Event};
 
 pub fn init_stdin(
@@ -19,11 +19,11 @@ pub fn init_stdin(
             match parse_control_command(&msg) {
                 Ok(Some(command)) => {
                     if let Err(err) = state.process_control_command(command) {
-                        eprintln!("control error: {err}");
+                        protocol::send(format!("error {err}"));
                     }
                 }
                 Ok(None) => {}
-                Err(err) => eprintln!("control parse error: {err}"),
+                Err(err) => protocol::send(format!("error {err}")),
             }
         })?;
 

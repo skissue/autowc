@@ -48,6 +48,9 @@ impl AutoWC {
             ControlCommand::Scroll { dx, dy } => {
                 self.process_virtual_scroll(dx, dy);
             }
+            ControlCommand::Screenshot { path } => {
+                self.queue_screenshot(path);
+            }
             ControlCommand::Quit => {
                 self.loop_signal.stop();
             }

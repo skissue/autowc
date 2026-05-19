@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use smithay::backend::input::{ButtonState, KeyState};
 
 use crate::keycodes::key_to_code;
@@ -10,6 +12,7 @@ pub enum ControlCommand {
     PointerButton { button: u32, action: PressAction },
     Click { x: f64, y: f64, button: u32 },
     Scroll { dx: f64, dy: f64 },
+    Screenshot { path: Option<PathBuf> },
     Quit,
 }
 
@@ -62,6 +65,7 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
         "mouse" => parse_mouse(parts),
         "click" => parse_click(parts),
         "scroll" => parse_scroll(parts),
+        "screenshot" => parse_screenshot(parts),
         _ => Err(format!("unknown command: {command}")),
     }
 }
@@ -159,6 +163,15 @@ fn parse_scroll<'a>(
     ensure_no_extra(parts)?;
 
     Ok(Some(ControlCommand::Scroll { dx, dy }))
+}
+
+fn parse_screenshot<'a>(
+    mut parts: impl Iterator<Item = &'a str>,
+) -> Result<Option<ControlCommand>, String> {
+    let path = parts.next().map(PathBuf::from);
+    ensure_no_extra(parts)?;
+
+    Ok(Some(ControlCommand::Screenshot { path }))
 }
 
 fn parse_press_action(value: Option<&str>) -> Result<PressAction, String> {
@@ -336,6 +349,20 @@ mod tests {
         assert_eq!(
             parse_control_command("quit").unwrap(),
             Some(ControlCommand::Quit)
+        );
+    }
+
+    #[test]
+    fn parses_screenshot() {
+        assert_eq!(
+            parse_control_command("screenshot").unwrap(),
+            Some(ControlCommand::Screenshot { path: None })
+        );
+        assert_eq!(
+            parse_control_command("screenshot /tmp/autowc.png").unwrap(),
+            Some(ControlCommand::Screenshot {
+                path: Some(PathBuf::from("/tmp/autowc.png")),
+            })
         );
     }
 

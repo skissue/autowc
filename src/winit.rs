@@ -11,7 +11,7 @@ use smithay::{
                 Kind,
             },
             gles::{GlesRenderer, GlesTexture},
-            Bind as _, Offscreen as _, Texture as _,
+            Bind as _, ExportMem as _, Offscreen as _, Texture as _,
         },
         winit::{self, WinitEvent},
     },
@@ -24,7 +24,7 @@ use smithay::{
     utils::{Rectangle, Transform},
 };
 
-use crate::AutoWC;
+use crate::{protocol, screenshot, AutoWC};
 
 pub fn init_winit(
     event_loop: &mut EventLoop<AutoWC>,
@@ -134,6 +134,35 @@ pub fn init_winit(
                                     [0.0, 0.0, 0.0, 1.0],
                                 )
                                 .unwrap();
+                        }
+
+                        while let Some(request) = state.pending_screenshots.pop_front() {
+                            let result = renderer
+                                .copy_texture(
+                                    &virtual_framebuffer.texture,
+                                    Rectangle::from_size(virtual_buffer_size),
+                                    Fourcc::Abgr8888,
+                                )
+                                .and_then(|mapping| {
+                                    renderer.map_texture(&mapping).map(|pixels| pixels.to_vec())
+                                })
+                                .map_err(|err| err.to_string())
+                                .and_then(|pixels| {
+                                    screenshot::write_png(
+                                        &request.path,
+                                        &pixels,
+                                        virtual_buffer_size.w as u32,
+                                        virtual_buffer_size.h as u32,
+                                    )
+                                });
+
+                            match result {
+                                Ok(()) => protocol::send(format!(
+                                    "screenshot {}",
+                                    screenshot::display_path(&request.path)
+                                )),
+                                Err(err) => protocol::send(format!("error {err}")),
+                            }
                         }
 
                         let virtual_texture = TextureBuffer::from_texture(

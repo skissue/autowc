@@ -4,6 +4,8 @@ mod control;
 mod handlers;
 mod input;
 mod keycodes;
+mod protocol;
+mod screenshot;
 mod state;
 mod stdin;
 mod winit;

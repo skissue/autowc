@@ -1,4 +1,4 @@
-use std::{ffi::OsString, process::Child, sync::Arc};
+use std::{collections::VecDeque, ffi::OsString, path::PathBuf, process::Child, sync::Arc};
 
 use smithay::{
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
@@ -37,6 +37,8 @@ pub struct AutoWC {
     pub pointer_in_viewport: bool,
     pub child: Option<Child>,
     pub stay_alive: bool,
+    pub pending_screenshots: VecDeque<ScreenshotRequest>,
+    screenshot_counter: u64,
 
     // Smithay State
     pub compositor_state: CompositorState,
@@ -115,6 +117,8 @@ impl AutoWC {
             pointer_in_viewport: false,
             child: None,
             stay_alive,
+            pending_screenshots: VecDeque::new(),
+            screenshot_counter: 0,
 
             compositor_state,
             xdg_shell_state,
@@ -324,6 +328,27 @@ impl AutoWC {
         keyboard.set_focus(self, surface, serial);
     }
 
+    pub fn queue_screenshot(&mut self, path: Option<PathBuf>) {
+        let path = path.unwrap_or_else(|| self.next_screenshot_path());
+        self.pending_screenshots
+            .push_back(ScreenshotRequest { path });
+    }
+
+    fn next_screenshot_path(&mut self) -> PathBuf {
+        let pid = std::process::id();
+
+        loop {
+            self.screenshot_counter += 1;
+            let path = std::env::temp_dir().join(format!(
+                "autowc-screenshot-{pid}-{}.png",
+                self.screenshot_counter
+            ));
+            if !path.exists() {
+                return path;
+            }
+        }
+    }
+
     fn promote_overlay(&mut self) {
         let Some(window) = self.overlay_windows.pop() else {
             self.focus_window(None);
@@ -368,6 +393,10 @@ impl AutoWC {
 #[derive(Default)]
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
+}
+
+pub struct ScreenshotRequest {
+    pub path: PathBuf,
 }
 
 impl ClientData for ClientState {
