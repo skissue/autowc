@@ -24,7 +24,7 @@ use smithay::{
     utils::{Rectangle, Transform},
 };
 
-use crate::{protocol, screenshot, AutoWC};
+use crate::{screenshot, AutoWC};
 
 pub fn init_winit(
     event_loop: &mut EventLoop<AutoWC>,
@@ -157,11 +157,10 @@ pub fn init_winit(
                                 });
 
                             match result {
-                                Ok(()) => protocol::send(format!(
-                                    "screenshot {}",
-                                    screenshot::display_path(&request.path)
-                                )),
-                                Err(err) => protocol::send(format!("error {err}")),
+                                Ok(()) => state
+                                    .protocol
+                                    .send_screenshot(screenshot::display_path(&request.path)),
+                                Err(err) => state.protocol.send_error(err),
                             }
                         }
 

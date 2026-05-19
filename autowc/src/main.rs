@@ -17,6 +17,7 @@ use std::{
 };
 
 use clap::Parser;
+use protocol::Protocol;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
 use smithay::utils::{Logical, Size};
@@ -36,6 +37,10 @@ struct Cli {
     /// Keep AutoWC running after all client windows close.
     #[arg(long)]
     stay_alive: bool,
+
+    /// Use newline-delimited JSON for stdin commands and stdout responses.
+    #[arg(long)]
+    json: bool,
 
     /// Delay between key press/release events for key and text commands, in milliseconds.
     #[arg(long, default_value_t = crate::input::DEFAULT_KEY_EVENT_INTERVAL_MS)]
@@ -63,6 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let virtual_size = virtual_size_from_cli(&cli)?;
     let timing = timing_from_cli(&cli);
+    let protocol = protocol_from_cli(&cli);
 
     let mut event_loop: EventLoop<AutoWC> = EventLoop::try_new()?;
 
@@ -74,6 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         virtual_size,
         cli.stay_alive,
         timing,
+        protocol,
     );
 
     // Open a Wayland/X11 window for our nested compositor
@@ -123,6 +130,14 @@ fn timing_from_cli(cli: &Cli) -> TimingOptions {
         chord_key_interval: Duration::from_millis(cli.chord_key_interval_ms),
         chord_hold_duration: Duration::from_millis(cli.chord_hold_ms),
         command_interval: Duration::from_millis(cli.command_interval_ms),
+    }
+}
+
+fn protocol_from_cli(cli: &Cli) -> Protocol {
+    if cli.json {
+        Protocol::Json
+    } else {
+        Protocol::Plain
     }
 }
 

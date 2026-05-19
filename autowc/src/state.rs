@@ -31,6 +31,8 @@ use smithay::{
     },
 };
 
+use crate::protocol::Protocol;
+
 pub struct AutoWC {
     pub start_time: std::time::Instant,
     pub socket_name: OsString,
@@ -52,6 +54,7 @@ pub struct AutoWC {
     pub chord_key_interval: Duration,
     pub chord_hold_duration: Duration,
     pub command_interval: Duration,
+    pub protocol: Protocol,
     screenshot_counter: u64,
 
     // Smithay State
@@ -73,6 +76,7 @@ impl AutoWC {
         virtual_size: Size<i32, Logical>,
         stay_alive: bool,
         timing: TimingOptions,
+        protocol: Protocol,
     ) -> Self {
         let start_time = std::time::Instant::now();
 
@@ -139,6 +143,7 @@ impl AutoWC {
             chord_key_interval: timing.chord_key_interval,
             chord_hold_duration: timing.chord_hold_duration,
             command_interval: timing.command_interval,
+            protocol,
             screenshot_counter: 0,
 
             compositor_state,

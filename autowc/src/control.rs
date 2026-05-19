@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use serde::Deserialize;
 use smithay::backend::input::{ButtonState, KeyState};
 
 use crate::keycodes::key_to_code;
@@ -74,6 +75,21 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
     }
 }
 
+pub fn parse_json_control_line(line: &str) -> Result<Option<ControlCommand>, String> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(None);
+    }
+
+    parse_json_control_command(line).map(Some)
+}
+
+pub fn parse_json_control_command(line: &str) -> Result<ControlCommand, String> {
+    let command = serde_json::from_str::<JsonControlCommand>(line)
+        .map_err(|err| format!("invalid json command: {err}"))?;
+    command.into_control_command()
+}
+
 pub fn text_to_key_events(text: &str) -> Result<Vec<(u32, PressAction)>, String> {
     let mut events = Vec::new();
     let shift = key_to_code("ShiftLeft").unwrap();
@@ -93,6 +109,124 @@ pub fn text_to_key_events(text: &str) -> Result<Vec<(u32, PressAction)>, String>
     }
 
     Ok(events)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum JsonControlCommand {
+    Key {
+        key: String,
+        #[serde(default = "default_json_press_action")]
+        action: JsonPressAction,
+    },
+    Chord {
+        keys: Vec<String>,
+    },
+    Text {
+        text: String,
+    },
+    MouseMove {
+        x: f64,
+        y: f64,
+    },
+    MouseButton {
+        #[serde(default = "default_json_press_action")]
+        action: JsonPressAction,
+        button: Option<JsonMouseButton>,
+    },
+    Click {
+        x: f64,
+        y: f64,
+        button: Option<JsonMouseButton>,
+    },
+    Scroll {
+        dx: f64,
+        dy: f64,
+    },
+    Screenshot {
+        path: Option<PathBuf>,
+    },
+    Sleep {
+        ms: u64,
+    },
+    Quit,
+}
+
+impl JsonControlCommand {
+    fn into_control_command(self) -> Result<ControlCommand, String> {
+        match self {
+            Self::Key { key, action } => {
+                let code = key_to_code(&key).ok_or_else(|| format!("unknown key: {key}"))?;
+                Ok(ControlCommand::Key {
+                    code,
+                    action: action.into(),
+                })
+            }
+            Self::Chord { keys } => {
+                if keys.is_empty() {
+                    return Err("chord requires at least one key".into());
+                }
+
+                let mut codes = Vec::with_capacity(keys.len());
+                for key in keys {
+                    codes.push(key_to_code(&key).ok_or_else(|| format!("unknown key: {key}"))?);
+                }
+                Ok(ControlCommand::Chord { codes })
+            }
+            Self::Text { text } => Ok(ControlCommand::Text(text)),
+            Self::MouseMove { x, y } => Ok(ControlCommand::PointerMove { x, y }),
+            Self::MouseButton { action, button } => Ok(ControlCommand::PointerButton {
+                button: parse_json_button(button)?,
+                action: action.into(),
+            }),
+            Self::Click { x, y, button } => Ok(ControlCommand::Click {
+                x,
+                y,
+                button: parse_json_button(button)?,
+            }),
+            Self::Scroll { dx, dy } => Ok(ControlCommand::Scroll { dx, dy }),
+            Self::Screenshot { path } => Ok(ControlCommand::Screenshot { path }),
+            Self::Sleep { ms } => Ok(ControlCommand::Sleep { duration_ms: ms }),
+            Self::Quit => Ok(ControlCommand::Quit),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum JsonPressAction {
+    Down,
+    Up,
+    Press,
+}
+
+impl From<JsonPressAction> for PressAction {
+    fn from(action: JsonPressAction) -> Self {
+        match action {
+            JsonPressAction::Down => Self::Down,
+            JsonPressAction::Up => Self::Up,
+            JsonPressAction::Press => Self::Press,
+        }
+    }
+}
+
+fn default_json_press_action() -> JsonPressAction {
+    JsonPressAction::Press
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum JsonMouseButton {
+    Name(String),
+    Code(u32),
+}
+
+fn parse_json_button(button: Option<JsonMouseButton>) -> Result<u32, String> {
+    match button {
+        Some(JsonMouseButton::Name(button)) => parse_button(Some(&button)),
+        Some(JsonMouseButton::Code(button)) => Ok(button),
+        None => Ok(BTN_LEFT),
+    }
 }
 
 fn parse_key<'a>(
@@ -438,5 +572,113 @@ mod tests {
         assert!(parse_control_command("pointer move 10 20").is_err());
         assert!(parse_control_command("mouse move 10").is_err());
         assert!(parse_control_command("mouse button tap").is_err());
+    }
+
+    #[test]
+    fn parses_json_key_commands() {
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"key","key":"KeyA"}"#).unwrap(),
+            ControlCommand::Key {
+                code: key_to_code("KeyA").unwrap(),
+                action: PressAction::Press,
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"key","key":"KeyA","action":"down"}"#).unwrap(),
+            ControlCommand::Key {
+                code: key_to_code("KeyA").unwrap(),
+                action: PressAction::Down,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_json_chord_and_text_commands() {
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"chord","keys":["ControlLeft","KeyL"]}"#)
+                .unwrap(),
+            ControlCommand::Chord {
+                codes: vec![
+                    key_to_code("ControlLeft").unwrap(),
+                    key_to_code("KeyL").unwrap(),
+                ],
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"text","text":" hello\nworld "}"#).unwrap(),
+            ControlCommand::Text(" hello\nworld ".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_json_mouse_commands() {
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"mouse_move","x":10,"y":20}"#).unwrap(),
+            ControlCommand::PointerMove { x: 10.0, y: 20.0 }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"mouse_button"}"#).unwrap(),
+            ControlCommand::PointerButton {
+                button: BTN_LEFT,
+                action: PressAction::Press,
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"mouse_button","action":"up","button":"right"}"#)
+                .unwrap(),
+            ControlCommand::PointerButton {
+                button: BTN_RIGHT,
+                action: PressAction::Up,
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"mouse_button","button":273}"#).unwrap(),
+            ControlCommand::PointerButton {
+                button: BTN_RIGHT,
+                action: PressAction::Press,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_json_click_scroll_sleep_screenshot_and_quit() {
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"click","x":640,"y":360}"#).unwrap(),
+            ControlCommand::Click {
+                x: 640.0,
+                y: 360.0,
+                button: BTN_LEFT,
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"scroll","dx":0,"dy":-120}"#).unwrap(),
+            ControlCommand::Scroll {
+                dx: 0.0,
+                dy: -120.0,
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"sleep","ms":250}"#).unwrap(),
+            ControlCommand::Sleep { duration_ms: 250 }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"screenshot","path":"/tmp/autowc.png"}"#)
+                .unwrap(),
+            ControlCommand::Screenshot {
+                path: Some(PathBuf::from("/tmp/autowc.png")),
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"quit"}"#).unwrap(),
+            ControlCommand::Quit
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_json_input() {
+        assert!(parse_json_control_command(r#"{"type":"key","key":"KeyNope"}"#).is_err());
+        assert!(parse_json_control_command(r#"{"type":"chord","keys":[]}"#).is_err());
+        assert!(parse_json_control_command(r#"{"type":"mouse_button","action":"tap"}"#).is_err());
+        assert!(parse_json_control_command(r#"{"type":"sleep","ms":-1}"#).is_err());
     }
 }
