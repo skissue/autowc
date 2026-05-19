@@ -219,7 +219,7 @@ pub fn init_winit(
                     backend.window().request_redraw();
                 }
                 WinitEvent::CloseRequested => {
-                    state.loop_signal.stop();
+                    state.request_shutdown();
                 }
                 _ => (),
             };

@@ -161,7 +161,7 @@ impl AutoWC {
                     self.queue_screenshot(path);
                 }
                 QueuedControlAction::Quit => {
-                    self.loop_signal.stop();
+                    self.request_shutdown();
                 }
                 QueuedControlAction::Delay(duration) => {
                     self.next_control_action_at = Some(Instant::now() + duration);
