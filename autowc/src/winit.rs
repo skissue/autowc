@@ -40,7 +40,10 @@ pub fn init_winit(
     let (mut backend, winit) = winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
     state.set_host_size(backend.window_size());
     if state.dynamic_resize {
-        state.resize_virtual_output(logical_size_from_host(backend.window_size()));
+        state.resize_virtual_output(logical_size_from_host(
+            backend.window_size(),
+            backend.scale_factor(),
+        ));
     }
 
     let output = Output::new(
@@ -59,6 +62,7 @@ pub fn init_winit(
     state.space.map_output(&output, (0, 0));
 
     let mut virtual_framebuffer: Option<VirtualFramebuffer> = None;
+    let mut host_scale_factor = backend.scale_factor();
     let mut damage_tracker =
         OutputDamageTracker::new(backend.window_size(), 1.0, Transform::Flipped180);
 
@@ -66,14 +70,29 @@ pub fn init_winit(
         .handle()
         .insert_source(winit, move |event, _, state| {
             match event {
-                WinitEvent::Resized { size, .. } => {
-                    handle_host_resize(state, &output, &mut damage_tracker, size);
+                WinitEvent::Resized { size, scale_factor } => {
+                    handle_host_resize(
+                        state,
+                        &output,
+                        &mut damage_tracker,
+                        &mut host_scale_factor,
+                        size,
+                        scale_factor,
+                    );
                 }
                 WinitEvent::Input(event) => state.process_input_event(event),
                 WinitEvent::Redraw => {
                     let size = backend.window_size();
-                    if size != state.host_size {
-                        handle_host_resize(state, &output, &mut damage_tracker, size);
+                    let scale_factor = backend.scale_factor();
+                    if size != state.host_size || scale_factor != host_scale_factor {
+                        handle_host_resize(
+                            state,
+                            &output,
+                            &mut damage_tracker,
+                            &mut host_scale_factor,
+                            size,
+                            scale_factor,
+                        );
                     }
                     let damage = Rectangle::from_size(size);
 
@@ -225,18 +244,21 @@ fn handle_host_resize(
     state: &mut AutoWC,
     output: &Output,
     damage_tracker: &mut OutputDamageTracker,
+    host_scale_factor: &mut f64,
     size: Size<i32, Physical>,
+    scale_factor: f64,
 ) {
     state.set_host_size(size);
+    *host_scale_factor = scale_factor;
     if state.dynamic_resize {
-        state.resize_virtual_output(logical_size_from_host(size));
+        state.resize_virtual_output(logical_size_from_host(size, scale_factor));
         update_output_mode(output, state.virtual_size);
     }
     *damage_tracker = OutputDamageTracker::new(size, 1.0, Transform::Flipped180);
 }
 
-fn logical_size_from_host(size: Size<i32, Physical>) -> Size<i32, Logical> {
-    Size::from((size.w, size.h))
+fn logical_size_from_host(size: Size<i32, Physical>, scale_factor: f64) -> Size<i32, Logical> {
+    size.to_f64().to_logical(scale_factor).to_i32_round()
 }
 
 fn update_output_mode(output: &Output, size: Size<i32, Logical>) {
@@ -251,4 +273,17 @@ fn update_output_mode(output: &Output, size: Size<i32, Logical>) {
         Some((0, 0).into()),
     );
     output.set_preferred(mode);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logical_size_from_host_accounts_for_fractional_scale() {
+        assert_eq!(
+            logical_size_from_host(Size::from((2400, 1350)), 1.25),
+            Size::from((1920, 1080))
+        );
+    }
 }
