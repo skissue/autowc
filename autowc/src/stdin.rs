@@ -3,7 +3,10 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::{control::parse_control_command, protocol, AutoWC, EventLoop};
+use crate::{
+    control::{parse_control_command, ControlCommand},
+    protocol, AutoWC, EventLoop,
+};
 use smithay::reexports::calloop::{self, channel::Event};
 
 pub fn init_stdin(
@@ -18,8 +21,12 @@ pub fn init_stdin(
 
             match parse_control_command(&msg) {
                 Ok(Some(command)) => {
+                    let responds_with_screenshot =
+                        matches!(command, ControlCommand::Screenshot { .. });
                     if let Err(err) = state.process_control_command(command) {
                         protocol::send(format!("error {err}"));
+                    } else if !responds_with_screenshot {
+                        protocol::send("ok");
                     }
                 }
                 Ok(None) => {}
