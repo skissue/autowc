@@ -263,6 +263,14 @@ impl AutoWC {
 
                 let button_state = event.state();
 
+                if button_state == ButtonState::Pressed && !pointer.is_grabbed() {
+                    let focus = self
+                        .space
+                        .element_under(pointer.current_location())
+                        .map(|(window, _)| window.clone());
+                    self.focus_window(focus.as_ref());
+                }
+
                 pointer.button(
                     self,
                     &ButtonEvent {

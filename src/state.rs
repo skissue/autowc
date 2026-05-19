@@ -325,7 +325,6 @@ impl AutoWC {
             state.states.set(xdg_toplevel::State::TiledBottom);
             state.size = Some(self.virtual_size);
         });
-        window.set_activated(true);
     }
 
     pub fn configure_overlay(&self, window: &Window) {
@@ -338,12 +337,26 @@ impl AutoWC {
             state.states.unset(xdg_toplevel::State::TiledBottom);
             state.size = None;
         });
-        window.set_activated(true);
     }
 
     pub fn focus_window(&mut self, window: Option<&Window>) {
         let surface = window.map(|window| window.toplevel().unwrap().wl_surface().clone());
         let serial = SERIAL_COUNTER.next_serial();
+
+        if let Some(window) = window {
+            self.space.raise_element(window, true);
+        }
+
+        for window in self.mapped_windows() {
+            let toplevel = window.toplevel().unwrap();
+            let activated = surface
+                .as_ref()
+                .is_some_and(|surface| toplevel.wl_surface() == surface);
+            if window.set_activated(activated) && toplevel.is_initial_configure_sent() {
+                toplevel.send_pending_configure();
+            }
+        }
+
         let keyboard = self.seat.get_keyboard().unwrap();
         keyboard.set_focus(self, surface, serial);
     }
@@ -378,14 +391,20 @@ impl AutoWC {
         self.configure_primary(&window);
         self.space.map_element(window.clone(), (0, 0), false);
         self.primary_window = Some(window.clone());
-        window.toplevel().unwrap().send_pending_configure();
+        self.focus_window(Some(&window));
 
         let overlays = self.overlay_windows.clone();
         for overlay in overlays {
             self.center_overlay(&overlay);
         }
+    }
 
-        self.focus_window(Some(&window));
+    fn mapped_windows(&self) -> Vec<Window> {
+        self.primary_window
+            .iter()
+            .chain(self.overlay_windows.iter())
+            .cloned()
+            .collect()
     }
 
     fn maybe_exit_when_empty(&mut self) {
