@@ -1,0 +1,19 @@
+[package]
+name = "autowc"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+bitflags = "2.2.1"
+clap = { version = "4.6.1", features = ["derive"] }
+png = "0.18.1"
+
+[dependencies.smithay]
+git = "https://github.com/Smithay/smithay.git"
+default-features = false
+features = [
+    "backend_winit",
+    "wayland_frontend",
+    "desktop",
+]
