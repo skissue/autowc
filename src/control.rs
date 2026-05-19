@@ -7,6 +7,7 @@ use crate::keycodes::key_to_code;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlCommand {
     Key { code: u32, action: PressAction },
+    Chord { codes: Vec<u32> },
     Text(String),
     PointerMove { x: f64, y: f64 },
     PointerButton { button: u32, action: PressAction },
@@ -63,6 +64,7 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
     let command = parts.next().unwrap();
     match command {
         "key" => parse_key(parts),
+        "chord" => parse_chord(parts),
         "mouse" => parse_mouse(parts),
         "click" => parse_click(parts),
         "scroll" => parse_scroll(parts),
@@ -107,6 +109,20 @@ fn parse_key<'a>(
 
     let code = key_to_code(key).ok_or_else(|| format!("unknown key: {key}"))?;
     Ok(Some(ControlCommand::Key { code, action }))
+}
+
+fn parse_chord<'a>(parts: impl Iterator<Item = &'a str>) -> Result<Option<ControlCommand>, String> {
+    let keys = parts.collect::<Vec<_>>();
+    if keys.is_empty() {
+        return Err("usage: chord <KEY_NAME> [KEY_NAME ...]".into());
+    }
+
+    let mut codes = Vec::with_capacity(keys.len());
+    for key in keys {
+        codes.push(key_to_code(key).ok_or_else(|| format!("unknown key: {key}"))?);
+    }
+
+    Ok(Some(ControlCommand::Chord { codes }))
 }
 
 fn parse_mouse<'a>(
@@ -306,6 +322,21 @@ mod tests {
                 action: PressAction::Down,
             })
         );
+    }
+
+    #[test]
+    fn parses_chord() {
+        assert_eq!(
+            parse_control_command("chord KEY_LEFTCTRL KEY_L").unwrap(),
+            Some(ControlCommand::Chord {
+                codes: vec![
+                    key_to_code("KEY_LEFTCTRL").unwrap(),
+                    key_to_code("KEY_L").unwrap(),
+                ],
+            })
+        );
+        assert!(parse_control_command("chord").is_err());
+        assert!(parse_control_command("chord KEY_NOPE").is_err());
     }
 
     #[test]

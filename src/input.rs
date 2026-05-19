@@ -18,6 +18,7 @@ use crate::{
 };
 
 pub const CONTROL_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
+const CHORD_HOLD_DURATION: Duration = Duration::from_millis(75);
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
@@ -27,6 +28,22 @@ impl AutoWC {
                     self.control_queue.push_back(QueuedControlAction::Key {
                         code,
                         state: *state,
+                    });
+                }
+            }
+            ControlCommand::Chord { codes } => {
+                for code in &codes {
+                    self.control_queue.push_back(QueuedControlAction::Key {
+                        code: *code,
+                        state: KeyState::Pressed,
+                    });
+                }
+                self.control_queue
+                    .push_back(QueuedControlAction::Delay(CHORD_HOLD_DURATION));
+                for code in codes.iter().rev() {
+                    self.control_queue.push_back(QueuedControlAction::Key {
+                        code: *code,
+                        state: KeyState::Released,
                     });
                 }
             }
