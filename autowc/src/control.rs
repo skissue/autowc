@@ -398,6 +398,7 @@ fn char_to_key(ch: char) -> Option<(u32, bool)> {
         '9' => ("Digit9", false),
         ' ' => ("Space", false),
         '\n' => ("Enter", false),
+        '\t' => ("Tab", false),
         '-' => ("Minus", false),
         '_' => ("Minus", true),
         '=' => ("Equal", false),
@@ -588,6 +589,14 @@ mod tests {
         assert_eq!(
             text_to_key_events("\n").unwrap(),
             [(key_to_code("Enter").unwrap(), PressAction::Press)]
+        );
+    }
+
+    #[test]
+    fn text_tabs_map_to_tab() {
+        assert_eq!(
+            text_to_key_events("\t").unwrap(),
+            [(key_to_code("Tab").unwrap(), PressAction::Press)]
         );
     }
 
