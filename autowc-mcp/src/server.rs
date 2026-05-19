@@ -30,7 +30,7 @@ impl ServerHandler for AutoWcMcpServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("autowc-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Use launch to start an AutoWC session, run to send batched input, screenshot to observe without input, and close to end a session.",
+                "Use launch to start an AutoWC session, run to send batched input, screenshot to observe without input, and close to end a session. Key commands use W3C KeyboardEvent.code physical key names such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5. Do not use Linux KEY_* names.",
             )
     }
 }
@@ -77,7 +77,7 @@ impl AutoWcMcpServer {
 
     #[tool(
         name = "run",
-        description = "Run a batch of input commands in an AutoWC session, returning a final screenshot by default"
+        description = "Run a batch of input commands in an AutoWC session, returning a final screenshot by default. Key and chord commands use W3C KeyboardEvent.code names such as KeyA, ControlLeft, Enter, ArrowDown, Digit1, and F5."
     )]
     pub async fn run(
         &self,

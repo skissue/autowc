@@ -7,11 +7,17 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AutomationCommand {
     Key {
+        #[schemars(
+            description = "Physical key code using the W3C KeyboardEvent.code naming scheme. Examples: KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, F5. Values are case-sensitive and are not Linux KEY_* names."
+        )]
         key: String,
         #[serde(default)]
         state: KeyState,
     },
     Chord {
+        #[schemars(
+            description = "Keys to press together, each using W3C KeyboardEvent.code names such as ControlLeft, ShiftLeft, KeyT, Enter, ArrowDown, or Digit1. Values are case-sensitive and are physical key codes, not characters."
+        )]
         keys: Vec<String>,
     },
     Text {
@@ -242,5 +248,16 @@ mod tests {
     #[test]
     fn rejects_screenshot_paths_with_whitespace() {
         assert!(screenshot_line(Some(Path::new("/tmp/has space.png"))).is_err());
+    }
+
+    #[test]
+    fn command_schema_documents_key_format() {
+        let schema = schemars::schema_for!(AutomationCommand);
+        let schema = serde_json::to_string(&schema).unwrap();
+
+        assert!(schema.contains("W3C KeyboardEvent.code"));
+        assert!(schema.contains("KeyA"));
+        assert!(schema.contains("ControlLeft"));
+        assert!(schema.contains("not Linux KEY_* names"));
     }
 }
