@@ -19,6 +19,7 @@ use crate::{
 
 pub const CONTROL_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const KEY_EVENT_INTERVAL: Duration = Duration::from_millis(20);
+pub const DEFAULT_CHORD_KEY_INTERVAL: Duration = Duration::from_millis(10);
 const CHORD_HOLD_DURATION: Duration = Duration::from_millis(75);
 
 impl AutoWC {
@@ -35,11 +36,16 @@ impl AutoWC {
                 }
             }
             ControlCommand::Chord { codes } => {
-                for code in &codes {
+                let mut pressed_codes = codes.iter().peekable();
+                while let Some(code) = pressed_codes.next() {
                     self.control_queue.push_back(QueuedControlAction::Key {
                         code: *code,
                         state: KeyState::Pressed,
                     });
+                    if pressed_codes.peek().is_some() {
+                        self.control_queue
+                            .push_back(QueuedControlAction::Delay(self.chord_key_interval));
+                    }
                 }
                 self.control_queue
                     .push_back(QueuedControlAction::Delay(CHORD_HOLD_DURATION));
