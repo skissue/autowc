@@ -29,8 +29,7 @@ pub const DEFAULT_CHORD_KEY_INTERVAL: Duration =
     Duration::from_millis(DEFAULT_CHORD_KEY_INTERVAL_MS);
 pub const DEFAULT_CHORD_HOLD_DURATION: Duration =
     Duration::from_millis(DEFAULT_CHORD_HOLD_DURATION_MS);
-pub const DEFAULT_COMMAND_INTERVAL: Duration =
-    Duration::from_millis(DEFAULT_COMMAND_INTERVAL_MS);
+pub const DEFAULT_COMMAND_INTERVAL: Duration = Duration::from_millis(DEFAULT_COMMAND_INTERVAL_MS);
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
@@ -65,6 +64,8 @@ impl AutoWC {
                         state: KeyState::Released,
                     });
                 }
+                self.control_queue
+                    .push_back(QueuedControlAction::Delay(self.key_event_interval));
             }
             ControlCommand::Text(text) => {
                 for (code, action) in text_to_key_events(&text)? {
