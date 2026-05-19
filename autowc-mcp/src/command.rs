@@ -20,7 +20,9 @@ pub enum AutomationCommand {
         #[schemars(description = "Physical key names using the W3C KeyboardEvent.code scheme.")]
         keys: Vec<String>,
     },
-    #[schemars(description = "Type literal text.")]
+    #[schemars(
+        description = "Type literal text. Control characters are translated to keys when possible. For example, newline (\\n) will be translated to Enter, and tab (\\t) will translate to Tab."
+    )]
     Text {
         #[schemars(description = "Text to type.")]
         text: String,

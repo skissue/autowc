@@ -32,8 +32,6 @@ Keyboard commands use W3C KeyboardEvent.code physical key names, such as KeyA, D
 
 The run tool returns a final screenshot by default so agents can observe the result of a batch. Set return_screenshot to false only when intentionally running without immediate visual feedback.
 
-The text command types the provided string.
-
 If a session exits, later tool calls return ok=false with the captured stderr log.";
 
 #[derive(Debug, Clone)]
@@ -321,8 +319,8 @@ mod tests {
         assert!(SERVER_INSTRUCTIONS.contains("Typical flow"));
         assert!(SERVER_INSTRUCTIONS.contains("return_screenshot"));
         assert!(SERVER_INSTRUCTIONS.contains("W3C KeyboardEvent.code"));
-        assert!(SERVER_INSTRUCTIONS.contains("text command types"));
         assert!(!SERVER_INSTRUCTIONS.contains("KEY_*"));
+        assert!(!SERVER_INSTRUCTIONS.contains("newline characters"));
     }
 
     #[test]
