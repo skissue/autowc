@@ -48,7 +48,9 @@ pub struct AutoWC {
     pub pending_screenshots: VecDeque<ScreenshotRequest>,
     pub control_queue: VecDeque<QueuedControlAction>,
     pub next_control_action_at: Option<Instant>,
+    pub key_event_interval: Duration,
     pub chord_key_interval: Duration,
+    pub chord_hold_duration: Duration,
     pub command_interval: Duration,
     screenshot_counter: u64,
 
@@ -70,6 +72,7 @@ impl AutoWC {
         display: Display<Self>,
         virtual_size: Size<i32, Logical>,
         stay_alive: bool,
+        timing: TimingOptions,
     ) -> Self {
         let start_time = std::time::Instant::now();
 
@@ -132,8 +135,10 @@ impl AutoWC {
             pending_screenshots: VecDeque::new(),
             control_queue: VecDeque::new(),
             next_control_action_at: None,
-            chord_key_interval: crate::input::DEFAULT_CHORD_KEY_INTERVAL,
-            command_interval: crate::input::DEFAULT_COMMAND_INTERVAL,
+            key_event_interval: timing.key_event_interval,
+            chord_key_interval: timing.chord_key_interval,
+            chord_hold_duration: timing.chord_hold_duration,
+            command_interval: timing.command_interval,
             screenshot_counter: 0,
 
             compositor_state,
@@ -428,6 +433,25 @@ impl AutoWC {
         let x = ((self.virtual_size.w - geometry.size.w) / 2).max(0);
         let y = ((self.virtual_size.h - geometry.size.h) / 2).max(0);
         self.space.map_element(window.clone(), (x, y), false);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TimingOptions {
+    pub key_event_interval: Duration,
+    pub chord_key_interval: Duration,
+    pub chord_hold_duration: Duration,
+    pub command_interval: Duration,
+}
+
+impl Default for TimingOptions {
+    fn default() -> Self {
+        Self {
+            key_event_interval: crate::input::DEFAULT_KEY_EVENT_INTERVAL,
+            chord_key_interval: crate::input::DEFAULT_CHORD_KEY_INTERVAL,
+            chord_hold_duration: crate::input::DEFAULT_CHORD_HOLD_DURATION,
+            command_interval: crate::input::DEFAULT_COMMAND_INTERVAL,
+        }
     }
 }
 

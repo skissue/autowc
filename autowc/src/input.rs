@@ -18,10 +18,19 @@ use crate::{
 };
 
 pub const CONTROL_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
-const KEY_EVENT_INTERVAL: Duration = Duration::from_millis(20);
-pub const DEFAULT_CHORD_KEY_INTERVAL: Duration = Duration::from_millis(10);
-const CHORD_HOLD_DURATION: Duration = Duration::from_millis(75);
-pub const DEFAULT_COMMAND_INTERVAL: Duration = Duration::ZERO;
+pub const DEFAULT_KEY_EVENT_INTERVAL_MS: u64 = 20;
+pub const DEFAULT_CHORD_KEY_INTERVAL_MS: u64 = 10;
+pub const DEFAULT_CHORD_HOLD_DURATION_MS: u64 = 75;
+pub const DEFAULT_COMMAND_INTERVAL_MS: u64 = 0;
+
+pub const DEFAULT_KEY_EVENT_INTERVAL: Duration =
+    Duration::from_millis(DEFAULT_KEY_EVENT_INTERVAL_MS);
+pub const DEFAULT_CHORD_KEY_INTERVAL: Duration =
+    Duration::from_millis(DEFAULT_CHORD_KEY_INTERVAL_MS);
+pub const DEFAULT_CHORD_HOLD_DURATION: Duration =
+    Duration::from_millis(DEFAULT_CHORD_HOLD_DURATION_MS);
+pub const DEFAULT_COMMAND_INTERVAL: Duration =
+    Duration::from_millis(DEFAULT_COMMAND_INTERVAL_MS);
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
@@ -33,7 +42,7 @@ impl AutoWC {
                         state: *state,
                     });
                     self.control_queue
-                        .push_back(QueuedControlAction::Delay(KEY_EVENT_INTERVAL));
+                        .push_back(QueuedControlAction::Delay(self.key_event_interval));
                 }
             }
             ControlCommand::Chord { codes } => {
@@ -49,7 +58,7 @@ impl AutoWC {
                     }
                 }
                 self.control_queue
-                    .push_back(QueuedControlAction::Delay(CHORD_HOLD_DURATION));
+                    .push_back(QueuedControlAction::Delay(self.chord_hold_duration));
                 for code in codes.iter().rev() {
                     self.control_queue.push_back(QueuedControlAction::Key {
                         code: *code,
@@ -65,7 +74,7 @@ impl AutoWC {
                             state: *state,
                         });
                         self.control_queue
-                            .push_back(QueuedControlAction::Delay(KEY_EVENT_INTERVAL));
+                            .push_back(QueuedControlAction::Delay(self.key_event_interval));
                     }
                 }
             }

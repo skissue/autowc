@@ -20,7 +20,7 @@ use clap::Parser;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
 use smithay::utils::{Logical, Size};
-pub use state::AutoWC;
+pub use state::{AutoWC, TimingOptions};
 
 #[derive(Debug, Parser)]
 #[command(name = "autowc", about = "A small nested compositor for automation")]
@@ -37,6 +37,22 @@ struct Cli {
     #[arg(long)]
     stay_alive: bool,
 
+    /// Delay between key press/release events for key and text commands, in milliseconds.
+    #[arg(long, default_value_t = crate::input::DEFAULT_KEY_EVENT_INTERVAL_MS)]
+    key_event_interval_ms: u64,
+
+    /// Delay between pressing each key in a chord command, in milliseconds.
+    #[arg(long, default_value_t = crate::input::DEFAULT_CHORD_KEY_INTERVAL_MS)]
+    chord_key_interval_ms: u64,
+
+    /// Time to hold a chord after all chord keys are pressed, in milliseconds.
+    #[arg(long, default_value_t = crate::input::DEFAULT_CHORD_HOLD_DURATION_MS)]
+    chord_hold_ms: u64,
+
+    /// Delay after each stdin command, in milliseconds.
+    #[arg(long, default_value_t = crate::input::DEFAULT_COMMAND_INTERVAL_MS)]
+    command_interval_ms: u64,
+
     /// Command to launch inside AutoWC, followed by its arguments.
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     command: Vec<OsString>,
@@ -46,12 +62,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
     let cli = Cli::parse();
     let virtual_size = virtual_size_from_cli(&cli)?;
+    let timing = timing_from_cli(&cli);
 
     let mut event_loop: EventLoop<AutoWC> = EventLoop::try_new()?;
 
     let display: Display<AutoWC> = Display::new()?;
 
-    let mut state = AutoWC::new(&mut event_loop, display, virtual_size, cli.stay_alive);
+    let mut state = AutoWC::new(
+        &mut event_loop,
+        display,
+        virtual_size,
+        cli.stay_alive,
+        timing,
+    );
 
     // Open a Wayland/X11 window for our nested compositor
     crate::winit::init_winit(&mut event_loop, &mut state)?;
@@ -92,6 +115,15 @@ fn virtual_size_from_cli(cli: &Cli) -> Result<Size<i32, Logical>, Box<dyn std::e
     }
 
     Ok(Size::from((cli.width, cli.height)))
+}
+
+fn timing_from_cli(cli: &Cli) -> TimingOptions {
+    TimingOptions {
+        key_event_interval: Duration::from_millis(cli.key_event_interval_ms),
+        chord_key_interval: Duration::from_millis(cli.chord_key_interval_ms),
+        chord_hold_duration: Duration::from_millis(cli.chord_hold_ms),
+        command_interval: Duration::from_millis(cli.command_interval_ms),
+    }
 }
 
 fn spawn_client(command: &[OsString]) -> Result<Child, Box<dyn std::error::Error>> {
