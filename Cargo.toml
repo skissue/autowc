@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "autowc",
+    "autowc-mcp",
 ]
 resolver = "2"
 
