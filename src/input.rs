@@ -1,9 +1,9 @@
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-        KeyState, KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, InputBackend, InputEvent, KeyState,
+        KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
     },
     input::{
         keyboard::FilterResult,
@@ -18,8 +18,8 @@ use crate::{
 };
 
 pub const CONTROL_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
+const KEY_EVENT_INTERVAL: Duration = Duration::from_millis(20);
 const CHORD_HOLD_DURATION: Duration = Duration::from_millis(75);
-const TEXT_KEY_INTERVAL: Duration = Duration::from_millis(20);
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
@@ -30,6 +30,8 @@ impl AutoWC {
                         code,
                         state: *state,
                     });
+                    self.control_queue
+                        .push_back(QueuedControlAction::Delay(KEY_EVENT_INTERVAL));
                 }
             }
             ControlCommand::Chord { codes } => {
@@ -56,7 +58,7 @@ impl AutoWC {
                             state: *state,
                         });
                         self.control_queue
-                            .push_back(QueuedControlAction::Delay(TEXT_KEY_INTERVAL));
+                            .push_back(QueuedControlAction::Delay(KEY_EVENT_INTERVAL));
                     }
                 }
             }
@@ -149,7 +151,7 @@ impl AutoWC {
 
     pub fn process_virtual_input_event(&mut self, code: u32, state: KeyState) {
         let serial = SERIAL_COUNTER.next_serial();
-        let time = now_msec();
+        let time = self.now_msec();
 
         self.seat.get_keyboard().unwrap().input::<(), _>(
             self,
@@ -172,7 +174,7 @@ impl AutoWC {
             &MotionEvent {
                 location: pos,
                 serial,
-                time: now_msec(),
+                time: self.now_msec(),
             },
         );
         pointer.frame(self);
@@ -188,14 +190,14 @@ impl AutoWC {
                 button,
                 state,
                 serial,
-                time: now_msec(),
+                time: self.now_msec(),
             },
         );
         pointer.frame(self);
     }
 
     pub fn process_virtual_scroll(&mut self, dx: f64, dy: f64) {
-        let mut frame = AxisFrame::new(now_msec()).source(AxisSource::Wheel);
+        let mut frame = AxisFrame::new(self.now_msec()).source(AxisSource::Wheel);
         if dx != 0.0 {
             frame = frame.value(Axis::Horizontal, dx);
         }
@@ -212,7 +214,7 @@ impl AutoWC {
         match event {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
-                let time = Event::time_msec(&event);
+                let time = self.now_msec();
 
                 self.seat.get_keyboard().unwrap().input::<(), _>(
                     self,
@@ -243,7 +245,7 @@ impl AutoWC {
                     &MotionEvent {
                         location: pos,
                         serial,
-                        time: event.time_msec(),
+                        time: self.now_msec(),
                     },
                 );
                 pointer.frame(self);
@@ -267,7 +269,7 @@ impl AutoWC {
                         button,
                         state: button_state,
                         serial,
-                        time: event.time_msec(),
+                        time: self.now_msec(),
                     },
                 );
                 pointer.frame(self);
@@ -288,7 +290,7 @@ impl AutoWC {
                 let horizontal_amount_discrete = event.amount_v120(Axis::Horizontal);
                 let vertical_amount_discrete = event.amount_v120(Axis::Vertical);
 
-                let mut frame = AxisFrame::new(event.time_msec()).source(source);
+                let mut frame = AxisFrame::new(self.now_msec()).source(source);
                 if horizontal_amount != 0.0 {
                     frame = frame.value(Axis::Horizontal, horizontal_amount);
                     if let Some(discrete) = horizontal_amount_discrete {
@@ -318,11 +320,8 @@ impl AutoWC {
             _ => {}
         }
     }
-}
 
-fn now_msec() -> u32 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u32
+    fn now_msec(&self) -> u32 {
+        self.start_time.elapsed().as_millis() as u32
+    }
 }
