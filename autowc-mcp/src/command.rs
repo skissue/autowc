@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[schemars(inline)]
 pub enum AutomationCommand {
     #[schemars(description = "Send a keyboard key event.")]
     Key {
@@ -102,6 +103,7 @@ impl AutomationCommand {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+#[schemars(inline)]
 pub enum KeyState {
     Down,
     Up,
@@ -121,6 +123,7 @@ impl std::fmt::Display for KeyState {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+#[schemars(inline)]
 pub enum MouseButtonState {
     Down,
     Up,
@@ -140,6 +143,7 @@ impl std::fmt::Display for MouseButtonState {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(untagged)]
+#[schemars(inline)]
 pub enum MouseButton {
     Named(NamedMouseButton),
     Other(u32),
@@ -164,6 +168,7 @@ impl MouseButton {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[schemars(inline)]
 pub enum NamedMouseButton {
     Left,
     Right,
