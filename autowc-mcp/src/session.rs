@@ -6,7 +6,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::{
     fs,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
@@ -231,8 +231,8 @@ impl Session {
         let mut commands_executed = 0;
 
         for command in commands {
-            let lines = match command.to_autowc_lines().map_err(SessionError::new) {
-                Ok(lines) => lines,
+            let line = match command.to_autowc_line().map_err(SessionError::new) {
+                Ok(line) => line,
                 Err(error) => {
                     return Err(self
                         .run_error(commands_executed, error, return_screenshot)
@@ -240,12 +240,10 @@ impl Session {
                 }
             };
 
-            for line in lines {
-                if let Err(error) = self.write_command_and_expect_ok(&line).await {
-                    return Err(self
-                        .run_error(commands_executed, error, return_screenshot)
-                        .await);
-                }
+            if let Err(error) = self.write_command_and_expect_ok(&line).await {
+                return Err(self
+                    .run_error(commands_executed, error, return_screenshot)
+                    .await);
             }
 
             commands_executed += 1;
@@ -343,7 +341,7 @@ impl Session {
     }
 
     async fn close(&mut self) {
-        let _ = self.write_line("quit").await;
+        let _ = self.write_line(r#"{"type":"quit"}"#).await;
         if timeout(Duration::from_secs(2), self.child.wait())
             .await
             .is_err()
@@ -392,6 +390,7 @@ impl Session {
 
 fn autowc_args(config: &SessionConfig) -> Vec<String> {
     let mut args = vec![
+        "--json".into(),
         "--width".into(),
         config.width.to_string(),
         "--height".into(),
@@ -469,24 +468,38 @@ enum AutowcResponse {
 }
 
 fn parse_response(line: &str) -> Result<AutowcResponse, String> {
-    if line == "ok" {
-        return Ok(AutowcResponse::Ok);
+    let response: JsonAutowcResponse =
+        serde_json::from_str(line).map_err(|err| format!("invalid AutoWC JSON response: {err}"))?;
+
+    if let Some(error) = response.error {
+        return Err(error);
+    }
+    if !response.ok {
+        return Err("AutoWC returned ok=false without an error message".into());
     }
 
-    if let Some(path) = line.strip_prefix("screenshot ") {
-        if path.is_empty() {
-            return Err("AutoWC returned an empty screenshot path".into());
+    match response.response_type.as_deref() {
+        None => Ok(AutowcResponse::Ok),
+        Some("screenshot") => {
+            let path = response
+                .path
+                .ok_or_else(|| "AutoWC returned screenshot without a path".to_string())?;
+            if path.as_os_str().is_empty() {
+                return Err("AutoWC returned an empty screenshot path".into());
+            }
+            Ok(AutowcResponse::Screenshot { path })
         }
-        return Ok(AutowcResponse::Screenshot {
-            path: PathBuf::from(path),
-        });
+        Some(response_type) => Err(format!("unexpected AutoWC response type: {response_type}")),
     }
+}
 
-    if let Some(err) = line.strip_prefix("error ") {
-        return Err(err.to_string());
-    }
-
-    Err(format!("unexpected AutoWC response: {line}"))
+#[derive(Debug, Deserialize)]
+struct JsonAutowcResponse {
+    ok: bool,
+    #[serde(rename = "type")]
+    response_type: Option<String>,
+    path: Option<PathBuf>,
+    error: Option<String>,
 }
 
 #[cfg(test)]
@@ -495,7 +508,8 @@ mod tests {
 
     #[test]
     fn parses_screenshot_response() {
-        let response = parse_response("screenshot /tmp/autowc.png").unwrap();
+        let response =
+            parse_response(r#"{"ok":true,"type":"screenshot","path":"/tmp/autowc.png"}"#).unwrap();
         match response {
             AutowcResponse::Ok => panic!("expected screenshot response"),
             AutowcResponse::Screenshot { path } => {
@@ -506,13 +520,16 @@ mod tests {
 
     #[test]
     fn parses_ok_response() {
-        assert!(matches!(parse_response("ok").unwrap(), AutowcResponse::Ok));
+        assert!(matches!(
+            parse_response(r#"{"ok":true}"#).unwrap(),
+            AutowcResponse::Ok
+        ));
     }
 
     #[test]
     fn parses_error_response() {
         assert_eq!(
-            parse_response("error unsupported key").unwrap_err(),
+            parse_response(r#"{"ok":false,"error":"unsupported key"}"#).unwrap_err(),
             "unsupported key"
         );
     }
@@ -534,6 +551,7 @@ mod tests {
         assert_eq!(
             args,
             [
+                "--json",
                 "--width",
                 "800",
                 "--height",
@@ -566,6 +584,9 @@ mod tests {
             command_interval_ms: None,
         });
 
-        assert_eq!(args, ["--width", "1280", "--height", "720", "foot"]);
+        assert_eq!(
+            args,
+            ["--json", "--width", "1280", "--height", "720", "foot"]
+        );
     }
 }

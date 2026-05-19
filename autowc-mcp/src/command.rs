@@ -13,7 +13,7 @@ pub enum AutomationCommand {
         key: String,
         #[schemars(description = "Key transition to send. Defaults to press.")]
         #[serde(default)]
-        state: KeyState,
+        action: KeyAction,
     },
     #[schemars(description = "Press and release multiple keyboard keys together.")]
     Chord {
@@ -22,9 +22,7 @@ pub enum AutomationCommand {
     },
     #[schemars(description = "Type literal text.")]
     Text {
-        #[schemars(
-            description = "Text to type. Newline characters are currently converted to Enter key presses."
-        )]
+        #[schemars(description = "Text to type.")]
         text: String,
     },
     #[schemars(description = "Move the mouse pointer.")]
@@ -38,7 +36,7 @@ pub enum AutomationCommand {
     MouseButton {
         #[schemars(description = "Mouse button transition to send. Defaults to press.")]
         #[serde(default)]
-        state: MouseButtonState,
+        action: MouseButtonAction,
         #[schemars(description = "Mouse button to send. Defaults to left.")]
         #[serde(default)]
         button: MouseButton,
@@ -68,13 +66,17 @@ pub enum AutomationCommand {
 }
 
 impl AutomationCommand {
-    pub fn to_autowc_lines(&self) -> Result<Vec<String>, String> {
-        match self {
-            Self::Key { key, state } => {
+    pub fn to_autowc_line(&self) -> Result<String, String> {
+        let value = match self {
+            Self::Key { key, action } => {
                 if key.trim().is_empty() || key.split_whitespace().count() != 1 {
                     return Err("key must be one non-empty token".into());
                 }
-                Ok(vec![format!("key {key} {state}")])
+                serde_json::json!({
+                    "type": "key",
+                    "key": key,
+                    "action": action,
+                })
             }
             Self::Chord { keys } => {
                 if keys.is_empty() {
@@ -85,33 +87,57 @@ impl AutomationCommand {
                         return Err("chord keys must be non-empty tokens".into());
                     }
                 }
-                Ok(vec![format!("chord {}", keys.join(" "))])
+                serde_json::json!({
+                    "type": "chord",
+                    "keys": keys,
+                })
             }
-            Self::Text { text } => Ok(text_to_autowc_lines(text)),
-            Self::MouseMove { x, y } => Ok(vec![format!("mouse move {x} {y}")]),
-            Self::MouseButton { state, button } => {
-                Ok(vec![format!("mouse button {state} {}", button.as_autowc())])
-            }
-            Self::Click { x, y, button } => {
-                Ok(vec![format!("click {x} {y} {}", button.as_autowc())])
-            }
-            Self::Scroll { dx, dy } => Ok(vec![format!("scroll {dx} {dy}")]),
-            Self::Sleep { ms } => Ok(vec![format!("sleep {ms}")]),
-        }
+            Self::Text { text } => serde_json::json!({
+                "type": "text",
+                "text": text,
+            }),
+            Self::MouseMove { x, y } => serde_json::json!({
+                "type": "mouse_move",
+                "x": x,
+                "y": y,
+            }),
+            Self::MouseButton { action, button } => serde_json::json!({
+                "type": "mouse_button",
+                "action": action,
+                "button": button,
+            }),
+            Self::Click { x, y, button } => serde_json::json!({
+                "type": "click",
+                "x": x,
+                "y": y,
+                "button": button,
+            }),
+            Self::Scroll { dx, dy } => serde_json::json!({
+                "type": "scroll",
+                "dx": dx,
+                "dy": dy,
+            }),
+            Self::Sleep { ms } => serde_json::json!({
+                "type": "sleep",
+                "ms": ms,
+            }),
+        };
+
+        serde_json::to_string(&value).map_err(|err| err.to_string())
     }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
-pub enum KeyState {
+pub enum KeyAction {
     Down,
     Up,
     #[default]
     Press,
 }
 
-impl std::fmt::Display for KeyState {
+impl std::fmt::Display for KeyAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Down => f.write_str("down"),
@@ -124,14 +150,14 @@ impl std::fmt::Display for KeyState {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]
-pub enum MouseButtonState {
+pub enum MouseButtonAction {
     Down,
     Up,
     #[default]
     Press,
 }
 
-impl std::fmt::Display for MouseButtonState {
+impl std::fmt::Display for MouseButtonAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Down => f.write_str("down"),
@@ -156,6 +182,7 @@ impl Default for MouseButton {
 }
 
 impl MouseButton {
+    #[cfg(test)]
     fn as_autowc(self) -> String {
         match self {
             Self::Named(NamedMouseButton::Left) => "left".into(),
@@ -176,35 +203,21 @@ pub enum NamedMouseButton {
 }
 
 pub fn screenshot_line(path: Option<&Path>) -> Result<String, String> {
-    let Some(path) = path else {
-        return Ok("screenshot".into());
+    let value = if let Some(path) = path {
+        let path = path
+            .to_str()
+            .ok_or_else(|| "screenshot path must be valid UTF-8".to_string())?;
+        serde_json::json!({
+            "type": "screenshot",
+            "path": path,
+        })
+    } else {
+        serde_json::json!({
+            "type": "screenshot",
+        })
     };
-    let path = path
-        .to_str()
-        .ok_or_else(|| "screenshot path must be valid UTF-8".to_string())?;
-    if path.split_whitespace().count() != 1 {
-        return Err("screenshot path cannot contain whitespace".into());
-    }
-    Ok(format!("screenshot {path}"))
-}
 
-fn text_to_autowc_lines(text: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut rest = text;
-
-    while let Some((line, tail)) = rest.split_once('\n') {
-        if !line.is_empty() {
-            lines.push(format!("text {line}"));
-        }
-        lines.push("key Enter press".into());
-        rest = tail;
-    }
-
-    if !rest.is_empty() {
-        lines.push(format!("text {rest}"));
-    }
-
-    lines
+    serde_json::to_string(&value).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
@@ -215,22 +228,25 @@ mod tests {
     fn serializes_default_key_press() {
         let command = AutomationCommand::Key {
             key: "KeyA".into(),
-            state: KeyState::default(),
+            action: KeyAction::default(),
         };
 
-        assert_eq!(command.to_autowc_lines().unwrap(), ["key KeyA press"]);
+        assert_eq!(
+            command.to_autowc_line().unwrap(),
+            r#"{"action":"press","key":"KeyA","type":"key"}"#
+        );
     }
 
     #[test]
     fn serializes_mouse_defaults() {
         let command = AutomationCommand::MouseButton {
-            state: MouseButtonState::default(),
+            action: MouseButtonAction::default(),
             button: MouseButton::default(),
         };
 
         assert_eq!(
-            command.to_autowc_lines().unwrap(),
-            ["mouse button press left"]
+            command.to_autowc_line().unwrap(),
+            r#"{"action":"press","button":"left","type":"mouse_button"}"#
         );
     }
 
@@ -250,8 +266,8 @@ mod tests {
         };
 
         assert_eq!(
-            command.to_autowc_lines().unwrap(),
-            ["text hello", "key Enter press", "text world"]
+            command.to_autowc_line().unwrap(),
+            r#"{"text":"hello\nworld","type":"text"}"#
         );
     }
 
@@ -259,18 +275,22 @@ mod tests {
     fn rejects_bad_tokens() {
         assert!(AutomationCommand::Key {
             key: "KeyA KeyB".into(),
-            state: KeyState::Press,
+            action: KeyAction::Press,
         }
-        .to_autowc_lines()
+        .to_autowc_line()
         .is_err());
         assert!(AutomationCommand::Chord { keys: vec![] }
-            .to_autowc_lines()
+            .to_autowc_line()
             .is_err());
     }
 
     #[test]
-    fn rejects_screenshot_paths_with_whitespace() {
-        assert!(screenshot_line(Some(Path::new("/tmp/has space.png"))).is_err());
+    fn serializes_screenshot_paths_with_whitespace() {
+        assert_eq!(
+            screenshot_line(Some(Path::new("/tmp/has space.png"))).unwrap(),
+            r#"{"path":"/tmp/has space.png","type":"screenshot"}"#
+        );
+        assert_eq!(screenshot_line(None).unwrap(), r#"{"type":"screenshot"}"#);
     }
 
     #[test]
@@ -279,7 +299,7 @@ mod tests {
         let schema = serde_json::to_string(&schema).unwrap();
 
         assert!(schema.contains("W3C KeyboardEvent.code"));
-        assert!(schema.contains("Newline characters are currently converted to Enter"));
+        assert!(schema.contains("Text to type"));
         assert!(schema.contains("Virtual-display x coordinate"));
         assert!(schema.contains("Sleep duration in whole milliseconds"));
     }
