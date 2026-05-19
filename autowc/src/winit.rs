@@ -16,12 +16,12 @@ use smithay::{
         winit::{self, WinitEvent},
     },
     desktop::{space::space_render_elements, Window},
-    output::{Mode, Output, PhysicalProperties, Subpixel},
+    output::{Mode, Output, PhysicalProperties, Scale as OutputScale, Subpixel},
     reexports::{
         calloop::EventLoop,
         winit::{dpi::LogicalSize, window::Window as WinitWindow},
     },
-    utils::{Logical, Physical, Rectangle, Size, Transform},
+    utils::{Buffer, Logical, Physical, Rectangle, Size, Transform},
 };
 
 use crate::{screenshot, AutoWC};
@@ -38,12 +38,10 @@ pub fn init_winit(
         .with_title("AutoWC")
         .with_visible(true);
     let (mut backend, winit) = winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
-    state.set_host_size(backend.window_size());
+    let initial_host = HostGeometry::new(backend.window_size(), backend.scale_factor());
+    state.set_host_size(initial_host.size);
     if state.dynamic_resize {
-        state.resize_virtual_output(logical_size_from_host(
-            backend.window_size(),
-            backend.scale_factor(),
-        ));
+        state.resize_virtual_output(initial_host.virtual_size());
     }
 
     let output = Output::new(
@@ -57,12 +55,16 @@ pub fn init_winit(
         },
     );
     let _global = output.create_global::<AutoWC>(&state.display_handle);
-    update_output_mode(&output, state.virtual_size);
+    update_output_mode(
+        &output,
+        initial_host.output_mode_size(state),
+        initial_host.output_scale(state),
+    );
 
     state.space.map_output(&output, (0, 0));
 
     let mut virtual_framebuffer: Option<VirtualFramebuffer> = None;
-    let mut host_scale_factor = backend.scale_factor();
+    let mut host_scale_factor = initial_host.scale_factor;
     let mut damage_tracker =
         OutputDamageTracker::new(backend.window_size(), 1.0, Transform::Flipped180);
 
@@ -98,8 +100,12 @@ pub fn init_winit(
 
                     {
                         let (renderer, mut framebuffer) = backend.bind().unwrap();
-                        let virtual_buffer_size =
-                            state.virtual_size.to_buffer(1, Transform::Normal);
+                        let virtual_scale = if state.dynamic_resize {
+                            host_scale_factor
+                        } else {
+                            1.0
+                        };
+                        let virtual_buffer_size = buffer_size(state.virtual_size, virtual_scale);
 
                         let recreate_virtual_framebuffer = virtual_framebuffer
                             .as_ref()
@@ -111,8 +117,8 @@ pub fn init_winit(
                                     .create_buffer(Fourcc::Abgr8888, virtual_buffer_size)
                                     .unwrap(),
                                 damage_tracker: OutputDamageTracker::new(
-                                    state.virtual_size.to_physical(1),
-                                    1.0,
+                                    buffer_size_as_physical(virtual_buffer_size),
+                                    virtual_scale,
                                     Transform::Normal,
                                 ),
                             });
@@ -178,19 +184,20 @@ pub fn init_winit(
                             Transform::Normal,
                             Some(vec![Rectangle::from_size(virtual_buffer_size)]),
                         );
+                        let presentation_size = final_pass_logical_size(state);
                         let virtual_element = TextureRenderElement::from_texture_buffer(
                             (0.0, 0.0),
                             &virtual_texture,
                             None,
                             None,
-                            Some(state.virtual_size),
+                            Some(presentation_size),
                             Kind::Unspecified,
                         );
                         let render_elements: Vec<_> = constrain_render_elements(
                             [virtual_element],
                             (0, 0),
                             Rectangle::from_size(size),
-                            Rectangle::from_size(state.virtual_size.to_physical(1)),
+                            Rectangle::from_size(presentation_size.to_physical(1)),
                             ConstrainScaleBehavior::Fit,
                             ConstrainAlign::CENTER,
                             1.0,
@@ -248,28 +255,96 @@ fn handle_host_resize(
     size: Size<i32, Physical>,
     scale_factor: f64,
 ) {
-    state.set_host_size(size);
-    *host_scale_factor = scale_factor;
+    let host = HostGeometry::new(size, scale_factor);
+    state.set_host_size(host.size);
+    *host_scale_factor = host.scale_factor;
     if state.dynamic_resize {
-        state.resize_virtual_output(logical_size_from_host(size, scale_factor));
-        update_output_mode(output, state.virtual_size);
+        state.resize_virtual_output(host.virtual_size());
+        update_output_mode(
+            output,
+            host.output_mode_size(state),
+            host.output_scale(state),
+        );
     }
-    *damage_tracker = OutputDamageTracker::new(size, 1.0, Transform::Flipped180);
+    *damage_tracker = OutputDamageTracker::new(host.size, 1.0, Transform::Flipped180);
 }
 
-fn logical_size_from_host(size: Size<i32, Physical>, scale_factor: f64) -> Size<i32, Logical> {
-    size.to_f64().to_logical(scale_factor).to_i32_round()
+#[derive(Clone, Copy)]
+struct HostGeometry {
+    size: Size<i32, Physical>,
+    scale_factor: f64,
 }
 
-fn update_output_mode(output: &Output, size: Size<i32, Logical>) {
+impl HostGeometry {
+    fn new(size: Size<i32, Physical>, scale_factor: f64) -> Self {
+        Self {
+            size,
+            scale_factor: normalized_scale_factor(scale_factor),
+        }
+    }
+
+    fn virtual_size(self) -> Size<i32, Logical> {
+        self.size
+            .to_f64()
+            .to_logical(self.scale_factor)
+            .to_i32_ceil()
+    }
+
+    fn output_mode_size(self, state: &AutoWC) -> Size<i32, Physical> {
+        if state.dynamic_resize {
+            self.size
+        } else {
+            state.virtual_size.to_physical(1)
+        }
+    }
+
+    fn output_scale(self, state: &AutoWC) -> f64 {
+        if state.dynamic_resize {
+            self.scale_factor
+        } else {
+            1.0
+        }
+    }
+}
+
+fn buffer_size(size: Size<i32, Logical>, scale_factor: f64) -> Size<i32, Buffer> {
+    size.to_f64()
+        .to_buffer(normalized_scale_factor(scale_factor), Transform::Normal)
+        .to_i32_round()
+}
+
+fn buffer_size_as_physical(size: Size<i32, Buffer>) -> Size<i32, Physical> {
+    Size::from((size.w, size.h))
+}
+
+fn final_pass_logical_size(state: &AutoWC) -> Size<i32, Logical> {
+    // The final pass renders into the host framebuffer at scale 1, so dynamic
+    // mode presents the already-scaled offscreen buffer at host pixel size.
+    if state.dynamic_resize {
+        state.host_size.to_logical(1)
+    } else {
+        state.virtual_size
+    }
+}
+
+fn normalized_scale_factor(scale_factor: f64) -> f64 {
+    if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    }
+}
+
+fn update_output_mode(output: &Output, size: Size<i32, Physical>, scale_factor: f64) {
+    let scale_factor = normalized_scale_factor(scale_factor);
     let mode = Mode {
-        size: size.to_physical(1),
+        size,
         refresh: 60_000,
     };
     output.change_current_state(
         Some(mode),
         Some(Transform::Flipped180),
-        None,
+        Some(OutputScale::Fractional(scale_factor)),
         Some((0, 0).into()),
     );
     output.set_preferred(mode);
@@ -280,10 +355,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn logical_size_from_host_accounts_for_fractional_scale() {
+    fn virtual_size_from_host_accounts_for_fractional_scale() {
+        let host = HostGeometry::new(Size::from((2400, 1350)), 1.25);
+
+        assert_eq!(host.virtual_size(), Size::from((1920, 1080)));
+    }
+
+    #[test]
+    fn buffer_size_scales_logical_size_to_physical_size() {
         assert_eq!(
-            logical_size_from_host(Size::from((2400, 1350)), 1.25),
-            Size::from((1920, 1080))
+            buffer_size(Size::from((1920, 1080)), 1.25),
+            Size::from((2400, 1350))
         );
+    }
+
+    #[test]
+    fn normalized_scale_factor_rejects_invalid_values() {
+        assert_eq!(normalized_scale_factor(1.25), 1.25);
+        assert_eq!(normalized_scale_factor(0.0), 1.0);
+        assert_eq!(normalized_scale_factor(f64::NAN), 1.0);
     }
 }
