@@ -2,10 +2,16 @@ use std::time::Duration;
 
 use smithay::{
     backend::{
+        allocator::Fourcc,
         renderer::{
             damage::OutputDamageTracker,
-            element::utils::{constrain_render_elements, ConstrainAlign, ConstrainScaleBehavior},
-            gles::GlesRenderer,
+            element::{
+                texture::{TextureBuffer, TextureRenderElement},
+                utils::{constrain_render_elements, ConstrainAlign, ConstrainScaleBehavior},
+                Kind,
+            },
+            gles::{GlesRenderer, GlesTexture},
+            Bind as _, Offscreen as _, Texture as _,
         },
         winit::{self, WinitEvent},
     },
@@ -62,6 +68,7 @@ pub fn init_winit(
 
     state.space.map_output(&output, (0, 0));
 
+    let mut virtual_framebuffer: Option<VirtualFramebuffer> = None;
     let mut damage_tracker =
         OutputDamageTracker::new(backend.window_size(), 1.0, Transform::Flipped180);
 
@@ -84,6 +91,26 @@ pub fn init_winit(
 
                     {
                         let (renderer, mut framebuffer) = backend.bind().unwrap();
+                        let virtual_buffer_size =
+                            state.virtual_size.to_buffer(1, Transform::Normal);
+
+                        let recreate_virtual_framebuffer = virtual_framebuffer
+                            .as_ref()
+                            .map(|framebuffer| framebuffer.texture.size() != virtual_buffer_size)
+                            .unwrap_or(true);
+                        if recreate_virtual_framebuffer {
+                            virtual_framebuffer = Some(VirtualFramebuffer {
+                                texture: renderer
+                                    .create_buffer(Fourcc::Abgr8888, virtual_buffer_size)
+                                    .unwrap(),
+                                damage_tracker: OutputDamageTracker::new(
+                                    state.virtual_size.to_physical(1),
+                                    1.0,
+                                    Transform::Normal,
+                                ),
+                            });
+                        }
+
                         let render_elements = space_render_elements::<_, Window, _>(
                             renderer,
                             [&state.space],
@@ -91,8 +118,41 @@ pub fn init_winit(
                             1.0,
                         )
                         .unwrap();
+
+                        let virtual_framebuffer = virtual_framebuffer.as_mut().unwrap();
+                        {
+                            let mut virtual_target =
+                                renderer.bind(&mut virtual_framebuffer.texture).unwrap();
+
+                            virtual_framebuffer
+                                .damage_tracker
+                                .render_output(
+                                    renderer,
+                                    &mut virtual_target,
+                                    0,
+                                    &render_elements,
+                                    [0.0, 0.0, 0.0, 1.0],
+                                )
+                                .unwrap();
+                        }
+
+                        let virtual_texture = TextureBuffer::from_texture(
+                            renderer,
+                            virtual_framebuffer.texture.clone(),
+                            1,
+                            Transform::Normal,
+                            Some(vec![Rectangle::from_size(virtual_buffer_size)]),
+                        );
+                        let virtual_element = TextureRenderElement::from_texture_buffer(
+                            (0.0, 0.0),
+                            &virtual_texture,
+                            None,
+                            None,
+                            Some(state.virtual_size),
+                            Kind::Unspecified,
+                        );
                         let render_elements: Vec<_> = constrain_render_elements(
-                            render_elements,
+                            [virtual_element],
                             (0, 0),
                             Rectangle::from_size(size),
                             Rectangle::from_size(state.virtual_size.to_physical(1)),
@@ -138,4 +198,9 @@ pub fn init_winit(
         })?;
 
     Ok(())
+}
+
+struct VirtualFramebuffer {
+    texture: GlesTexture,
+    damage_tracker: OutputDamageTracker,
 }
