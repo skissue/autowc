@@ -3,11 +3,8 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::{keycodes::key_to_code, AutoWC, EventLoop};
-use smithay::{
-    backend::input::KeyState,
-    reexports::calloop::{self, channel::Event},
-};
+use crate::{control::parse_control_command, AutoWC, EventLoop};
+use smithay::reexports::calloop::{self, channel::Event};
 
 pub fn init_stdin(
     event_loop: &mut EventLoop<AutoWC>,
@@ -19,16 +16,26 @@ pub fn init_stdin(
         .insert_source(rx, move |event: Event<String>, _, state| {
             let Event::Msg(msg) = event else { return };
 
-            let key_code = key_to_code(&msg);
-            state.process_virtual_input_event(key_code, KeyState::Pressed);
-            state.process_virtual_input_event(key_code, KeyState::Released);
+            match parse_control_command(&msg) {
+                Ok(Some(command)) => {
+                    if let Err(err) = state.process_control_command(command) {
+                        eprintln!("control error: {err}");
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => eprintln!("control parse error: {err}"),
+            }
         })?;
 
     let handle = thread::spawn(move || {
         for line in io::stdin().lines() {
-            let line = line.unwrap();
+            let Ok(line) = line else {
+                break;
+            };
 
-            tx.send(line.trim().to_string()).unwrap();
+            if tx.send(line).is_err() {
+                break;
+            }
         }
     });
 

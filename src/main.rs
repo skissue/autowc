@@ -1,5 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
+mod control;
 mod handlers;
 mod input;
 mod keycodes;

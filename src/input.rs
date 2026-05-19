@@ -2,8 +2,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, Event, InputBackend, InputEvent, KeyState,
-        KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
+        KeyState, KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
     },
     input::{
         keyboard::FilterResult,
@@ -12,15 +12,53 @@ use smithay::{
     utils::{Physical, Point, SERIAL_COUNTER},
 };
 
-use crate::state::AutoWC;
+use crate::{
+    control::{text_to_key_events, ControlCommand},
+    state::AutoWC,
+};
 
 impl AutoWC {
+    pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
+        match command {
+            ControlCommand::Key { code, action } => {
+                for state in action.key_states() {
+                    self.process_virtual_input_event(code, *state);
+                }
+            }
+            ControlCommand::Text(text) => {
+                for (code, action) in text_to_key_events(&text)? {
+                    for state in action.key_states() {
+                        self.process_virtual_input_event(code, *state);
+                    }
+                }
+            }
+            ControlCommand::PointerMove { x, y } => {
+                self.process_virtual_pointer_motion((x, y).into());
+            }
+            ControlCommand::PointerButton { button, action } => {
+                for state in action.button_states() {
+                    self.process_virtual_pointer_button(button, *state);
+                }
+            }
+            ControlCommand::Click { x, y, button } => {
+                self.process_virtual_pointer_motion((x, y).into());
+                self.process_virtual_pointer_button(button, ButtonState::Pressed);
+                self.process_virtual_pointer_button(button, ButtonState::Released);
+            }
+            ControlCommand::Scroll { dx, dy } => {
+                self.process_virtual_scroll(dx, dy);
+            }
+            ControlCommand::Quit => {
+                self.loop_signal.stop();
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn process_virtual_input_event(&mut self, code: u32, state: KeyState) {
         let serial = SERIAL_COUNTER.next_serial();
-        let time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u32;
+        let time = now_msec();
 
         self.seat.get_keyboard().unwrap().input::<(), _>(
             self,
@@ -30,6 +68,53 @@ impl AutoWC {
             time,
             |_, _, _| FilterResult::Forward,
         );
+    }
+
+    pub fn process_virtual_pointer_motion(&mut self, pos: Point<f64, smithay::utils::Logical>) {
+        let serial = SERIAL_COUNTER.next_serial();
+        let pointer = self.seat.get_pointer().unwrap();
+        let under = self.surface_under(pos);
+
+        pointer.motion(
+            self,
+            under,
+            &MotionEvent {
+                location: pos,
+                serial,
+                time: now_msec(),
+            },
+        );
+        pointer.frame(self);
+    }
+
+    pub fn process_virtual_pointer_button(&mut self, button: u32, state: ButtonState) {
+        let serial = SERIAL_COUNTER.next_serial();
+        let pointer = self.seat.get_pointer().unwrap();
+
+        pointer.button(
+            self,
+            &ButtonEvent {
+                button,
+                state,
+                serial,
+                time: now_msec(),
+            },
+        );
+        pointer.frame(self);
+    }
+
+    pub fn process_virtual_scroll(&mut self, dx: f64, dy: f64) {
+        let mut frame = AxisFrame::new(now_msec()).source(AxisSource::Wheel);
+        if dx != 0.0 {
+            frame = frame.value(Axis::Horizontal, dx);
+        }
+        if dy != 0.0 {
+            frame = frame.value(Axis::Vertical, dy);
+        }
+
+        let pointer = self.seat.get_pointer().unwrap();
+        pointer.axis(self, frame);
+        pointer.frame(self);
     }
 
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
@@ -142,4 +227,11 @@ impl AutoWC {
             _ => {}
         }
     }
+}
+
+fn now_msec() -> u32 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u32
 }

@@ -1,7 +1,7 @@
 // From https://gitlab.freedesktop.org/libinput/libinput/-/blob/main/include/linux/linux/input-event-codes.h
 
-pub fn key_to_code(key: &str) -> u32 {
-    match key {
+pub fn key_to_code(key: &str) -> Option<u32> {
+    Some(match key {
         "KEY_RESERVED" => 0,
         "KEY_ESC" => 1,
         "KEY_1" => 2,
@@ -195,6 +195,6 @@ pub fn key_to_code(key: &str) -> u32 {
         "KEY_BRIGHTNESSUP" => 225,
         "KEY_MEDIA" => 226,
 
-        _ => unimplemented!(),
-    }
+        _ => return None,
+    })
 }
