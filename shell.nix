@@ -9,6 +9,7 @@ with pkgs;
       # Testing apps
       foot
       gtk4
+      wev
     ];
     LD_LIBRARY_PATH = lib.makeLibraryPath [wayland libGL];
   }
