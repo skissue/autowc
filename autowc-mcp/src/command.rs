@@ -6,44 +6,62 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AutomationCommand {
+    #[schemars(description = "Send a keyboard key event.")]
     Key {
-        #[schemars(
-            description = "Physical key code using the W3C KeyboardEvent.code naming scheme. Examples: KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, F5. Values are case-sensitive and are not Linux KEY_* names."
-        )]
+        #[schemars(description = "Physical key name using the W3C KeyboardEvent.code scheme.")]
         key: String,
+        #[schemars(description = "Key transition to send. Defaults to press.")]
         #[serde(default)]
         state: KeyState,
     },
+    #[schemars(description = "Press and release multiple keyboard keys together.")]
     Chord {
-        #[schemars(
-            description = "Keys to press together, each using W3C KeyboardEvent.code names such as ControlLeft, ShiftLeft, KeyT, Enter, ArrowDown, or Digit1. Values are case-sensitive and are physical key codes, not characters."
-        )]
+        #[schemars(description = "Physical key names using the W3C KeyboardEvent.code scheme.")]
         keys: Vec<String>,
     },
+    #[schemars(description = "Type literal text.")]
     Text {
+        #[schemars(
+            description = "Text to type. Newline characters are currently converted to Enter key presses."
+        )]
         text: String,
     },
+    #[schemars(description = "Move the mouse pointer.")]
     MouseMove {
+        #[schemars(description = "Virtual-display x coordinate in pixels.")]
         x: f64,
+        #[schemars(description = "Virtual-display y coordinate in pixels.")]
         y: f64,
     },
+    #[schemars(description = "Send a mouse button event.")]
     MouseButton {
+        #[schemars(description = "Mouse button transition to send. Defaults to press.")]
         #[serde(default)]
         state: MouseButtonState,
+        #[schemars(description = "Mouse button to send. Defaults to left.")]
         #[serde(default)]
         button: MouseButton,
     },
+    #[schemars(description = "Move the mouse pointer, then press and release a mouse button.")]
     Click {
+        #[schemars(description = "Virtual-display x coordinate in pixels.")]
         x: f64,
+        #[schemars(description = "Virtual-display y coordinate in pixels.")]
         y: f64,
+        #[schemars(description = "Mouse button to click. Defaults to left.")]
         #[serde(default)]
         button: MouseButton,
     },
+    #[schemars(description = "Send a mouse wheel scroll event.")]
     Scroll {
+        #[schemars(description = "Horizontal scroll amount in wheel units.")]
         dx: f64,
+        #[schemars(description = "Vertical scroll amount in wheel units.")]
         dy: f64,
     },
+    #[schemars(description = "Pause before continuing the batch.")]
     Sleep {
+        #[schemars(description = "Sleep duration in whole milliseconds.")]
         ms: u64,
     },
 }
@@ -251,13 +269,13 @@ mod tests {
     }
 
     #[test]
-    fn command_schema_documents_key_format() {
+    fn command_schema_documents_agent_visible_fields() {
         let schema = schemars::schema_for!(AutomationCommand);
         let schema = serde_json::to_string(&schema).unwrap();
 
         assert!(schema.contains("W3C KeyboardEvent.code"));
-        assert!(schema.contains("KeyA"));
-        assert!(schema.contains("ControlLeft"));
-        assert!(schema.contains("not Linux KEY_* names"));
+        assert!(schema.contains("Newline characters are currently converted to Enter"));
+        assert!(schema.contains("Virtual-display x coordinate"));
+        assert!(schema.contains("Sleep duration in whole milliseconds"));
     }
 }

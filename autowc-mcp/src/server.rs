@@ -17,6 +17,25 @@ use crate::{
     },
 };
 
+const SERVER_INSTRUCTIONS: &str = "\
+AutoWC runs applications inside nested compositor sessions for GUI automation.
+
+Typical flow:
+1. launch starts a session by running a command inside AutoWC.
+2. run sends an ordered batch of input commands to that session.
+3. screenshot observes the current framebuffer without sending input.
+4. close stops the compositor process.
+
+Mouse coordinates are virtual-display pixels with the origin at the top-left of the AutoWC display. The launch width and height set that virtual display size.
+
+Keyboard commands use W3C KeyboardEvent.code physical key names, such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5.
+
+The run tool returns a final screenshot by default so agents can observe the result of a batch. Set return_screenshot to false only when intentionally running without immediate visual feedback.
+
+The text command types literal text. Currently, newline characters in text are converted to Enter key presses.
+
+If a session exits, later tool calls return ok=false with the captured stderr log.";
+
 #[derive(Debug, Clone)]
 pub struct AutoWcMcpServer {
     autowc_binary: PathBuf,
@@ -29,9 +48,7 @@ impl ServerHandler for AutoWcMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("autowc-mcp", env!("CARGO_PKG_VERSION")))
-            .with_instructions(
-                "Use launch to start an AutoWC session, run to send batched input, screenshot to observe without input, and close to end a session. Key commands use W3C KeyboardEvent.code physical key names such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5. Do not use Linux KEY_* names.",
-            )
+            .with_instructions(SERVER_INSTRUCTIONS)
     }
 }
 
@@ -47,7 +64,7 @@ impl AutoWcMcpServer {
 
     #[tool(
         name = "launch",
-        description = "Launch an application inside a new AutoWC session"
+        description = "Start an AutoWC session by running a command inside a nested compositor."
     )]
     pub async fn launch(
         &self,
@@ -77,7 +94,7 @@ impl AutoWcMcpServer {
 
     #[tool(
         name = "run",
-        description = "Run a batch of input commands in an AutoWC session, returning a final screenshot by default. Key and chord commands use W3C KeyboardEvent.code names such as KeyA, ControlLeft, Enter, ArrowDown, Digit1, and F5."
+        description = "Send a batch of automation commands to a session."
     )]
     pub async fn run(
         &self,
@@ -98,7 +115,7 @@ impl AutoWcMcpServer {
 
     #[tool(
         name = "screenshot",
-        description = "Capture the latest AutoWC session framebuffer as an inline PNG image"
+        description = "Capture the latest framebuffer without sending input."
     )]
     pub async fn screenshot(
         &self,
@@ -116,7 +133,10 @@ impl AutoWcMcpServer {
         Ok(screenshot_result(params.session_id, screenshot))
     }
 
-    #[tool(name = "close", description = "Close an AutoWC session")]
+    #[tool(
+        name = "close",
+        description = "Close a session and stop its compositor process."
+    )]
     pub async fn close(
         &self,
         Parameters(params): Parameters<CloseParams>,
@@ -135,31 +155,63 @@ impl AutoWcMcpServer {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct LaunchParams {
+    #[schemars(
+        description = "Command to run inside AutoWC as argv: the first item is the executable, and the remaining items are its arguments."
+    )]
     pub command: Vec<String>,
+    #[schemars(description = "Virtual display width in pixels. Defaults to 1280.")]
     pub width: Option<u32>,
+    #[schemars(description = "Virtual display height in pixels. Defaults to 720.")]
     pub height: Option<u32>,
+    #[schemars(
+        description = "When true, keep the AutoWC session running after all client windows exit. Defaults to false."
+    )]
     pub stay_alive: Option<bool>,
+    #[schemars(
+        description = "Delay in milliseconds between synthetic key press and release events. Uses AutoWC's default when omitted."
+    )]
     pub key_event_interval_ms: Option<u64>,
+    #[schemars(
+        description = "Delay in milliseconds between pressing each key in a chord. Uses AutoWC's default when omitted."
+    )]
     pub chord_key_interval_ms: Option<u64>,
+    #[schemars(
+        description = "Duration in milliseconds to hold a chord after all keys are pressed. Uses AutoWC's default when omitted."
+    )]
     pub chord_hold_ms: Option<u64>,
+    #[schemars(
+        description = "Delay in milliseconds after each command in a run batch. Uses AutoWC's default when omitted."
+    )]
     pub command_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunParams {
+    #[schemars(description = "Session id returned by launch.")]
     pub session_id: String,
+    #[schemars(
+        description = "Ordered automation command batch. Command types are key, chord, text, mouse_move, mouse_button, click, scroll, and sleep."
+    )]
     pub commands: Vec<AutomationCommand>,
+    #[schemars(
+        description = "Whether to return an inline screenshot after the batch completes. Defaults to true."
+    )]
     pub return_screenshot: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenshotParams {
+    #[schemars(description = "Session id returned by launch.")]
     pub session_id: String,
+    #[schemars(
+        description = "Optional PNG output path. When omitted, AutoWC writes to a temporary file; the MCP result includes the image inline either way."
+    )]
     pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CloseParams {
+    #[schemars(description = "Session id returned by launch.")]
     pub session_id: String,
 }
 
@@ -263,6 +315,47 @@ fn error_result(session_id: Option<String>, err: SessionError) -> CallToolResult
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_instructions_are_the_canonical_usage_guide() {
+        assert!(SERVER_INSTRUCTIONS.contains("Typical flow"));
+        assert!(SERVER_INSTRUCTIONS.contains("return_screenshot"));
+        assert!(SERVER_INSTRUCTIONS.contains("W3C KeyboardEvent.code"));
+        assert!(SERVER_INSTRUCTIONS.contains("newline characters in text"));
+        assert!(!SERVER_INSTRUCTIONS.contains("KEY_*"));
+    }
+
+    #[test]
+    fn launch_schema_documents_session_options() {
+        let schema = schemars::schema_for!(LaunchParams);
+        let schema = serde_json::to_string(&schema).unwrap();
+
+        assert!(schema.contains("first item is the executable"));
+        assert!(schema.contains("Defaults to 1280"));
+        assert!(schema.contains("Defaults to 720"));
+        assert!(schema.contains("stay"));
+        assert!(schema.contains("Delay in milliseconds"));
+    }
+
+    #[test]
+    fn run_schema_documents_batch_and_screenshot_default() {
+        let schema = schemars::schema_for!(RunParams);
+        let schema = serde_json::to_string(&schema).unwrap();
+
+        assert!(schema.contains("Ordered automation command batch"));
+        assert!(schema.contains("key, chord, text"));
+        assert!(schema.contains("Defaults to true"));
+    }
+
+    #[test]
+    fn screenshot_schema_documents_optional_path() {
+        let schema = schemars::schema_for!(ScreenshotParams);
+        let schema = serde_json::to_string(&schema).unwrap();
+
+        assert!(schema.contains("Optional PNG output path"));
+        assert!(schema.contains("temporary file"));
+        assert!(schema.contains("image inline"));
+    }
 
     #[test]
     fn run_result_includes_inline_image_when_present() {
