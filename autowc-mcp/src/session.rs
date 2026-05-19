@@ -54,6 +54,23 @@ pub struct RunOutcome {
     pub screenshot: Option<Screenshot>,
 }
 
+#[derive(Debug)]
+pub struct RunError {
+    pub error: SessionError,
+    pub commands_executed: usize,
+    pub screenshot: Option<Screenshot>,
+}
+
+impl RunError {
+    fn new(error: SessionError) -> Self {
+        Self {
+            error,
+            commands_executed: 0,
+            screenshot: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionError {
     pub message: String,
@@ -125,8 +142,8 @@ impl SessionManager {
         session_id: &str,
         commands: &[AutomationCommand],
         return_screenshot: bool,
-    ) -> Result<RunOutcome, SessionError> {
-        let session = self.get_session(session_id).await?;
+    ) -> Result<RunOutcome, RunError> {
+        let session = self.get_session(session_id).await.map_err(RunError::new)?;
         let mut session = session.lock().await;
         session.run(commands, return_screenshot).await
     }
@@ -209,29 +226,75 @@ impl Session {
         &mut self,
         commands: &[AutomationCommand],
         return_screenshot: bool,
-    ) -> Result<RunOutcome, SessionError> {
-        self.ensure_running().await?;
-        let lines = commands
-            .iter()
-            .map(AutomationCommand::to_autowc_lines)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(SessionError::new)?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
+    ) -> Result<RunOutcome, RunError> {
+        self.ensure_running().await.map_err(RunError::new)?;
+        let mut commands_executed = 0;
 
-        for line in lines {
-            self.write_line(&line).await?;
+        for command in commands {
+            let lines = match command.to_autowc_lines().map_err(SessionError::new) {
+                Ok(lines) => lines,
+                Err(error) => {
+                    return Err(self
+                        .run_error(commands_executed, error, return_screenshot)
+                        .await)
+                }
+            };
+
+            for line in lines {
+                if let Err(error) = self.write_command_and_expect_ok(&line).await {
+                    return Err(self
+                        .run_error(commands_executed, error, return_screenshot)
+                        .await);
+                }
+            }
+
+            commands_executed += 1;
         }
 
         // Use a screenshot as a protocol sync point even when the caller does
         // not want the image back; otherwise command errors could remain unread.
-        let screenshot = self.screenshot(None, return_screenshot).await?;
+        let screenshot = self
+            .screenshot(None, return_screenshot)
+            .await
+            .map_err(|error| RunError {
+                error,
+                commands_executed,
+                screenshot: None,
+            })?;
 
         Ok(RunOutcome {
-            commands_executed: commands.len(),
+            commands_executed,
             screenshot: return_screenshot.then_some(screenshot),
         })
+    }
+
+    async fn run_error(
+        &mut self,
+        commands_executed: usize,
+        error: SessionError,
+        return_screenshot: bool,
+    ) -> RunError {
+        let screenshot = if return_screenshot {
+            self.screenshot(None, true).await.ok()
+        } else {
+            None
+        };
+
+        RunError {
+            error,
+            commands_executed,
+            screenshot,
+        }
+    }
+
+    async fn write_command_and_expect_ok(&mut self, line: &str) -> Result<(), SessionError> {
+        self.write_line(line).await?;
+        match self.read_response().await? {
+            AutowcResponse::Ok => Ok(()),
+            AutowcResponse::Screenshot { .. } => Err(SessionError::new(
+                "unexpected screenshot response while awaiting ok",
+            )),
+        }
     }
 
     async fn screenshot(
@@ -244,17 +307,8 @@ impl Session {
         self.write_line(&line).await?;
 
         loop {
-            let response = self
-                .stdout
-                .next_line()
-                .await
-                .map_err(|err| self.process_error(format!("failed reading AutoWC stdout: {err}")))?
-                .ok_or_else(|| {
-                    self.refresh_exit_status();
-                    self.process_error("AutoWC exited before responding")
-                })?;
-
-            match parse_response(&response).map_err(SessionError::new)? {
+            match self.read_response().await? {
+                AutowcResponse::Ok => continue,
                 AutowcResponse::Screenshot { path } => {
                     let data_base64 = if include_data {
                         STANDARD.encode(fs::read(&path).await.map_err(|err| {
@@ -272,6 +326,20 @@ impl Session {
                 }
             }
         }
+    }
+
+    async fn read_response(&mut self) -> Result<AutowcResponse, SessionError> {
+        let response = self
+            .stdout
+            .next_line()
+            .await
+            .map_err(|err| self.process_error(format!("failed reading AutoWC stdout: {err}")))?
+            .ok_or_else(|| {
+                self.refresh_exit_status();
+                self.process_error("AutoWC exited before responding")
+            })?;
+
+        parse_response(&response).map_err(SessionError::new)
     }
 
     async fn close(&mut self) {
@@ -396,10 +464,15 @@ impl SharedStderr {
 
 #[derive(Debug)]
 enum AutowcResponse {
+    Ok,
     Screenshot { path: PathBuf },
 }
 
 fn parse_response(line: &str) -> Result<AutowcResponse, String> {
+    if line == "ok" {
+        return Ok(AutowcResponse::Ok);
+    }
+
     if let Some(path) = line.strip_prefix("screenshot ") {
         if path.is_empty() {
             return Err("AutoWC returned an empty screenshot path".into());
@@ -424,10 +497,16 @@ mod tests {
     fn parses_screenshot_response() {
         let response = parse_response("screenshot /tmp/autowc.png").unwrap();
         match response {
+            AutowcResponse::Ok => panic!("expected screenshot response"),
             AutowcResponse::Screenshot { path } => {
                 assert_eq!(path, PathBuf::from("/tmp/autowc.png"));
             }
         }
+    }
+
+    #[test]
+    fn parses_ok_response() {
+        assert!(matches!(parse_response("ok").unwrap(), AutowcResponse::Ok));
     }
 
     #[test]
@@ -487,9 +566,6 @@ mod tests {
             command_interval_ms: None,
         });
 
-        assert_eq!(
-            args,
-            ["--width", "1280", "--height", "720", "foot"]
-        );
+        assert_eq!(args, ["--width", "1280", "--height", "720", "foot"]);
     }
 }

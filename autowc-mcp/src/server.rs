@@ -12,7 +12,8 @@ use serde_json::json;
 use crate::{
     command::AutomationCommand,
     session::{
-        RunOutcome, Screenshot, SessionConfig, SessionError, SessionManager, SessionMetadata,
+        RunError, RunOutcome, Screenshot, SessionConfig, SessionError, SessionManager,
+        SessionMetadata,
     },
 };
 
@@ -89,7 +90,7 @@ impl AutoWcMcpServer {
             .await
         {
             Ok(outcome) => outcome,
-            Err(err) => return Ok(error_result(Some(params.session_id), err)),
+            Err(err) => return Ok(run_error_result(params.session_id, err)),
         };
 
         Ok(run_result(params.session_id, outcome))
@@ -203,6 +204,34 @@ fn run_result(session_id: String, outcome: RunOutcome) -> CallToolResult {
     result
 }
 
+fn run_error_result(session_id: String, err: RunError) -> CallToolResult {
+    let mut content = vec![Content::text(err.error.message.clone())];
+    let screenshot_metadata = if let Some(screenshot) = err.screenshot {
+        content.push(Content::image(
+            screenshot.data_base64.clone(),
+            screenshot.mime_type,
+        ));
+        Some(ScreenshotMetadata {
+            path: screenshot.path,
+            mime_type: screenshot.mime_type,
+        })
+    } else {
+        None
+    };
+
+    let mut result = CallToolResult::error(content);
+    result.structured_content = Some(json!({
+        "ok": false,
+        "session_id": session_id,
+        "error": err.error.message,
+        "exit_status": err.error.exit_status,
+        "stderr": err.error.stderr,
+        "commands_executed": err.commands_executed,
+        "screenshot": screenshot_metadata,
+    }));
+    result
+}
+
 fn screenshot_result(session_id: String, screenshot: Screenshot) -> CallToolResult {
     let mut result = CallToolResult::success(vec![
         Content::text("ok"),
@@ -252,5 +281,33 @@ mod tests {
         assert_eq!(result.content.len(), 2);
         assert!(result.content[1].as_image().is_some());
         assert_eq!(result.structured_content.unwrap()["commands_executed"], 1);
+    }
+
+    #[test]
+    fn run_error_result_includes_partial_count_and_screenshot() {
+        let result = run_error_result(
+            "session".into(),
+            RunError {
+                error: SessionError {
+                    message: "unknown key: CTRL".into(),
+                    exit_status: None,
+                    stderr: String::new(),
+                },
+                commands_executed: 2,
+                screenshot: Some(Screenshot {
+                    path: PathBuf::from("/tmp/image.png"),
+                    mime_type: "image/png",
+                    data_base64: "abc".into(),
+                }),
+            },
+        );
+
+        assert!(result.is_error.unwrap_or(false));
+        assert_eq!(result.content.len(), 2);
+        assert!(result.content[1].as_image().is_some());
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["commands_executed"], 2);
+        assert_eq!(structured["error"], "unknown key: CTRL");
+        assert_eq!(structured["screenshot"]["mime_type"], "image/png");
     }
 }
