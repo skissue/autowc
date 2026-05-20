@@ -10,10 +10,9 @@ use smithay::{
                 utils::{constrain_render_elements, ConstrainAlign, ConstrainScaleBehavior},
                 Kind,
             },
-            gles::{GlesRenderer, GlesTexture},
+            gles::GlesTexture,
             Bind as _, ExportMem as _, Offscreen as _, Texture as _,
         },
-        winit::{self, WinitEvent},
     },
     desktop::{space::space_render_elements, Window},
     output::{Mode, Output, PhysicalProperties, Scale as OutputScale, Subpixel},
@@ -24,7 +23,10 @@ use smithay::{
     utils::{Buffer, Logical, Physical, Rectangle, Size, Transform},
 };
 
-use crate::{screenshot, AutoWC};
+use crate::{
+    host_winit::{self, HostEvent},
+    screenshot, AutoWC,
+};
 
 pub fn init_winit(
     event_loop: &mut EventLoop<AutoWC>,
@@ -37,7 +39,7 @@ pub fn init_winit(
         ))
         .with_title("AutoWC")
         .with_visible(true);
-    let (mut backend, winit) = winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
+    let (mut backend, host_events) = host_winit::init_from_attributes(window_attributes)?;
     let initial_host = HostGeometry::new(backend.window_size(), backend.scale_factor());
     state.set_host_size(initial_host.size);
     if state.dynamic_resize {
@@ -69,9 +71,15 @@ pub fn init_winit(
 
     event_loop
         .handle()
-        .insert_source(winit, move |event, _, state| {
+        .insert_source(host_events, move |event, _, state| {
             match event {
-                WinitEvent::Resized { size, scale_factor } => {
+                HostEvent::Resized {
+                    window_id,
+                    size,
+                    scale_factor,
+                    ..
+                } => {
+                    let _ = window_id;
                     handle_host_resize(
                         state,
                         &output,
@@ -81,8 +89,12 @@ pub fn init_winit(
                         scale_factor,
                     );
                 }
-                WinitEvent::Input(event) => state.process_input_event(event),
-                WinitEvent::Redraw => {
+                HostEvent::Input { window_id, event } => {
+                    let _ = window_id;
+                    state.process_input_event(event)
+                }
+                HostEvent::Redraw { window_id } => {
+                    let _ = window_id;
                     let size = backend.window_size();
                     let scale_factor = backend.scale_factor();
                     if size != state.host_size || scale_factor != host_scale_factor {
@@ -231,10 +243,13 @@ pub fn init_winit(
                     // Ask for redraw to schedule new frame.
                     backend.window().request_redraw();
                 }
-                WinitEvent::CloseRequested => {
+                HostEvent::CloseRequested { window_id } => {
+                    let _ = window_id;
                     state.request_shutdown();
                 }
-                _ => (),
+                HostEvent::Focus { window_id, focused } => {
+                    let _ = (window_id, focused);
+                }
             };
         })?;
 

@@ -2,6 +2,7 @@
 
 mod control;
 mod handlers;
+mod host_winit;
 mod input;
 mod keycodes;
 mod protocol;
