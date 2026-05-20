@@ -49,9 +49,7 @@ pub fn init_winit(
     state.set_host_window_requester(requester);
     init_probe_output(state);
 
-    let mut render_windows = HashMap::<AutoWindowId, RenderWindow>::new();
-    let mut host_windows = HashMap::<HostWindowId, AutoWindowId>::new();
-    let mut next_output_id = 1u64;
+    let mut render_windows = RenderWindows::new();
 
     event_loop
         .handle()
@@ -74,16 +72,7 @@ pub fn init_winit(
                 } else {
                     state.initial_virtual_size
                 };
-                let output = Output::new(
-                    format!("winit-{next_output_id}"),
-                    PhysicalProperties {
-                        size: (0, 0).into(),
-                        subpixel: Subpixel::Unknown,
-                        make: "Smithay".into(),
-                        model: "Winit".into(),
-                    },
-                );
-                next_output_id += 1;
+                let output = render_windows.create_output();
                 let _global = output.create_global::<AutoWC>(&state.display_handle);
                 update_output_mode(
                     &output,
@@ -99,20 +88,10 @@ pub fn init_winit(
                     virtual_size,
                 );
 
-                host_windows.insert(window_id, auto_window_id);
                 render_windows.insert(
+                    window_id,
                     auto_window_id,
-                    RenderWindow {
-                        output,
-                        virtual_framebuffer: None,
-                        host_size: host.size,
-                        host_scale_factor: host.scale_factor,
-                        damage_tracker: OutputDamageTracker::new(
-                            host.size,
-                            1.0,
-                            Transform::Flipped180,
-                        ),
-                    },
+                    RenderWindow::new(output, host.size, host.scale_factor),
                 );
 
                 backend.window(window_id).request_redraw();
@@ -125,9 +104,7 @@ pub fn init_winit(
             }
             HostEvent::WindowClosed { window_id } => {
                 backend.remove_window(window_id);
-                if let Some(auto_window_id) = host_windows.remove(&window_id) {
-                    render_windows.remove(&auto_window_id);
-                }
+                render_windows.remove_host_window(window_id);
             }
             HostEvent::Resized {
                 window_id,
@@ -135,24 +112,22 @@ pub fn init_winit(
                 scale_factor,
                 ..
             } => {
-                let Some(auto_window_id) = host_windows.get(&window_id).copied() else {
-                    return;
-                };
-                let Some(render_window) = render_windows.get_mut(&auto_window_id) else {
+                let Some((auto_window_id, render_window)) =
+                    render_windows.get_by_host_window_mut(window_id)
+                else {
                     return;
                 };
                 handle_host_resize(state, auto_window_id, render_window, size, scale_factor);
             }
             HostEvent::Input { window_id, event } => {
-                if let Some(auto_window_id) = host_windows.get(&window_id).copied() {
+                if let Some(auto_window_id) = render_windows.auto_window_id(window_id) {
                     state.process_input_event(auto_window_id, event);
                 }
             }
             HostEvent::Redraw { window_id } => {
-                let Some(auto_window_id) = host_windows.get(&window_id).copied() else {
-                    return;
-                };
-                let Some(render_window) = render_windows.get_mut(&auto_window_id) else {
+                let Some((auto_window_id, render_window)) =
+                    render_windows.get_by_host_window_mut(window_id)
+                else {
                     return;
                 };
 
@@ -177,7 +152,7 @@ pub fn init_winit(
                 state.close_host_window(window_id);
             }
             HostEvent::Focus { window_id, focused } => {
-                let Some(auto_window_id) = host_windows.get(&window_id).copied() else {
+                let Some(auto_window_id) = render_windows.auto_window_id(window_id) else {
                     return;
                 };
                 if focused {
@@ -211,6 +186,77 @@ struct RenderWindow {
     host_size: Size<i32, Physical>,
     host_scale_factor: f64,
     damage_tracker: OutputDamageTracker,
+}
+
+impl RenderWindow {
+    fn new(output: Output, host_size: Size<i32, Physical>, host_scale_factor: f64) -> Self {
+        Self {
+            output,
+            virtual_framebuffer: None,
+            host_size,
+            host_scale_factor,
+            damage_tracker: OutputDamageTracker::new(host_size, 1.0, Transform::Flipped180),
+        }
+    }
+}
+
+#[derive(Default)]
+struct RenderWindows {
+    by_host_window: HashMap<HostWindowId, AutoWindowId>,
+    by_auto_window: HashMap<AutoWindowId, RenderWindow>,
+    next_output_id: u64,
+}
+
+impl RenderWindows {
+    fn new() -> Self {
+        Self {
+            next_output_id: 1,
+            ..Self::default()
+        }
+    }
+
+    fn create_output(&mut self) -> Output {
+        let output = Output::new(
+            format!("winit-{}", self.next_output_id),
+            PhysicalProperties {
+                size: (0, 0).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Smithay".into(),
+                model: "Winit".into(),
+            },
+        );
+        self.next_output_id += 1;
+        output
+    }
+
+    fn insert(
+        &mut self,
+        host_window_id: HostWindowId,
+        auto_window_id: AutoWindowId,
+        render_window: RenderWindow,
+    ) {
+        self.by_host_window.insert(host_window_id, auto_window_id);
+        self.by_auto_window.insert(auto_window_id, render_window);
+    }
+
+    fn remove_host_window(&mut self, host_window_id: HostWindowId) {
+        if let Some(auto_window_id) = self.by_host_window.remove(&host_window_id) {
+            self.by_auto_window.remove(&auto_window_id);
+        }
+    }
+
+    fn auto_window_id(&self, host_window_id: HostWindowId) -> Option<AutoWindowId> {
+        self.by_host_window.get(&host_window_id).copied()
+    }
+
+    fn get_by_host_window_mut(
+        &mut self,
+        host_window_id: HostWindowId,
+    ) -> Option<(AutoWindowId, &mut RenderWindow)> {
+        let auto_window_id = self.auto_window_id(host_window_id)?;
+        let render_window = self.by_auto_window.get_mut(&auto_window_id)?;
+        Some((auto_window_id, render_window))
+    }
 }
 
 struct VirtualFramebuffer {
