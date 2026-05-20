@@ -81,6 +81,8 @@ pub fn handle_commit(state: &mut AutoWC, surface: &WlSurface) {
         }
 
         state.handle_toplevel_commit(surface);
+    } else {
+        state.handle_toplevel_commit(surface);
     }
 
     // Handle popup commits.

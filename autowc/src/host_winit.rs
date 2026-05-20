@@ -1,10 +1,20 @@
-use std::{collections::HashMap, io::Error as IoError, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    ffi::c_void,
+    io::Error as IoError,
+    path::PathBuf,
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
 
 use smithay::{
     backend::{
         egl::{
             context::{GlAttributes, PixelFormatRequirements},
-            native, EGLContext, EGLDisplay, EGLSurface, Error as EglError,
+            display::PixelFormat,
+            ffi, native, EGLContext, EGLDisplay, EGLSurface, Error as EglError,
         },
         input::{
             AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
@@ -20,9 +30,11 @@ use smithay::{
         },
         winit::{
             application::ApplicationHandler,
-            dpi::PhysicalPosition,
+            dpi::{LogicalSize, PhysicalPosition},
             event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent},
-            event_loop::{ActiveEventLoop, EventLoop as WinitEventLoop},
+            event_loop::{
+                ActiveEventLoop, EventLoop as WinitEventLoop, EventLoopProxy as WinitEventLoopProxy,
+            },
             platform::{pump_events::EventLoopExtPumpEvents, scancode::PhysicalKeyExtScancode},
             raw_window_handle::{HasWindowHandle, RawWindowHandle},
             window::{Window as WinitWindow, WindowAttributes, WindowId},
@@ -31,14 +43,21 @@ use smithay::{
     utils::{Clock, Monotonic, Physical, Rectangle, Size},
 };
 
+use crate::window::AutoWindowId;
+
 pub fn init_from_attributes(
     attributes: WindowAttributes,
-) -> Result<(HostGraphicsBackend, HostEventLoop), Box<dyn std::error::Error>> {
+) -> Result<(HostGraphicsBackend, HostEventLoop, HostWindowRequester), Box<dyn std::error::Error>> {
     let event_loop = WinitEventLoop::builder().build()?;
+    let event_loop_proxy = event_loop.create_proxy();
 
     #[allow(deprecated)]
     let window = Arc::new(event_loop.create_window(attributes)?);
-    let (display, context, egl_surface, is_x11) = create_egl_surface(&window)?;
+    let (display, context, egl_surface, is_x11) = create_initial_egl_surface(&window)?;
+    let pixel_format = context
+        .pixel_format()
+        .ok_or("EGL context does not have a window pixel format")?;
+    let config_id = context.config_id();
 
     let renderer = unsafe { GlesRenderer::new(context)? };
     let damage_tracking = display.supports_damage();
@@ -47,6 +66,7 @@ pub fn init_from_attributes(
     let scale_factor = window.scale_factor();
     let startup_window_id = window.id();
     let event_loop = Generic::new(event_loop, Interest::READ, Mode::Level);
+    let requests = Rc::new(RefCell::new(VecDeque::new()));
 
     let mut render_windows = HashMap::new();
     render_windows.insert(
@@ -72,8 +92,9 @@ pub fn init_from_attributes(
         HostGraphicsBackend {
             renderer,
             _display: display,
+            pixel_format,
+            config_id,
             windows: render_windows,
-            startup_window_id,
             damage_tracking,
         },
         HostEventLoop {
@@ -83,14 +104,19 @@ pub fn init_from_attributes(
                 clock: Clock::<Monotonic>::new(),
                 key_counter: 0,
             },
+            requests: requests.clone(),
             fake_token: None,
             pending_events: Vec::new(),
             event_loop,
         },
+        HostWindowRequester {
+            requests,
+            event_loop_proxy,
+        },
     ))
 }
 
-fn create_egl_surface(
+fn create_initial_egl_surface(
     window: &Arc<WinitWindow>,
 ) -> Result<(EGLDisplay, EGLContext, EGLSurface, bool), Box<dyn std::error::Error>> {
     let display = unsafe { EGLDisplay::new(window.clone())? };
@@ -111,7 +137,24 @@ fn create_egl_surface(
                 )
             })?;
 
-    let (egl_surface, is_x11) = match window.window_handle().map(|handle| handle.as_raw()) {
+    let (egl_surface, is_x11) = create_window_egl_surface(
+        &display,
+        context.pixel_format().unwrap(),
+        context.config_id(),
+        window,
+    )?;
+
+    let _ = context.unbind();
+    Ok((display, context, egl_surface, is_x11))
+}
+
+fn create_window_egl_surface(
+    display: &EGLDisplay,
+    pixel_format: PixelFormat,
+    config_id: ffi::egl::types::EGLConfig,
+    window: &Arc<WinitWindow>,
+) -> Result<(EGLSurface, bool), Box<dyn std::error::Error>> {
+    match window.window_handle().map(|handle| handle.as_raw()) {
         Ok(RawWindowHandle::Wayland(handle)) => {
             let size = window.inner_size();
             let surface = unsafe {
@@ -122,40 +165,78 @@ fn create_egl_surface(
                 )
             }?;
             let egl_surface = unsafe {
-                EGLSurface::new(
-                    &display,
-                    context.pixel_format().unwrap(),
-                    context.config_id(),
-                    surface,
-                )
-                .map_err(EglError::CreationFailed)?
+                EGLSurface::new(display, pixel_format, config_id, surface)
+                    .map_err(EglError::CreationFailed)?
             };
-            (egl_surface, false)
+            Ok((egl_surface, false))
         }
         Ok(RawWindowHandle::Xlib(handle)) => {
             let egl_surface = unsafe {
                 EGLSurface::new(
-                    &display,
-                    context.pixel_format().unwrap(),
-                    context.config_id(),
+                    display,
+                    pixel_format,
+                    config_id,
                     native::XlibWindow(handle.window),
                 )
                 .map_err(EglError::CreationFailed)?
             };
-            (egl_surface, true)
+            Ok((egl_surface, true))
         }
         _ => return Err("only Wayland and X11 host windows are supported".into()),
-    };
+    }
+}
 
-    let _ = context.unbind();
-    Ok((display, context, egl_surface, is_x11))
+#[derive(Clone, Debug)]
+pub struct HostWindowRequester {
+    requests: Rc<RefCell<VecDeque<HostWindowRequest>>>,
+    event_loop_proxy: WinitEventLoopProxy<()>,
+}
+
+impl HostWindowRequester {
+    pub fn create_window(
+        &self,
+        auto_window_id: AutoWindowId,
+        size: Size<i32, smithay::utils::Logical>,
+    ) {
+        let size = size.to_f64();
+        let attributes = WinitWindow::default_attributes()
+            .with_inner_size(LogicalSize::new(size.w, size.h))
+            .with_title("AutoWC")
+            .with_visible(true);
+        self.requests
+            .borrow_mut()
+            .push_back(HostWindowRequest::Create {
+                auto_window_id,
+                attributes,
+            });
+        let _ = self.event_loop_proxy.send_event(());
+    }
+
+    pub fn close_window(&self, window_id: WindowId) {
+        self.requests
+            .borrow_mut()
+            .push_back(HostWindowRequest::Close { window_id });
+        let _ = self.event_loop_proxy.send_event(());
+    }
+}
+
+#[derive(Debug)]
+enum HostWindowRequest {
+    Create {
+        auto_window_id: AutoWindowId,
+        attributes: WindowAttributes,
+    },
+    Close {
+        window_id: WindowId,
+    },
 }
 
 pub struct HostGraphicsBackend {
     renderer: GlesRenderer,
     _display: EGLDisplay,
+    pixel_format: PixelFormat,
+    config_id: *const c_void,
     windows: HashMap<WindowId, HostRenderWindow>,
-    startup_window_id: WindowId,
     damage_tracking: bool,
 }
 
@@ -166,21 +247,50 @@ struct HostRenderWindow {
 }
 
 impl HostGraphicsBackend {
-    pub fn window_size(&self) -> Size<i32, Physical> {
-        let (w, h): (i32, i32) = self.startup_window().inner_size().into();
-        (w, h).into()
+    pub fn add_window(
+        &mut self,
+        window: Arc<WinitWindow>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let window_id = window.id();
+        let (egl_surface, _) =
+            create_window_egl_surface(&self._display, self.pixel_format, self.config_id, &window)?;
+        self.windows.insert(
+            window_id,
+            HostRenderWindow {
+                window,
+                egl_surface,
+                bind_size: None,
+            },
+        );
+        Ok(())
     }
 
-    pub fn scale_factor(&self) -> f64 {
-        self.startup_window().scale_factor()
+    pub fn remove_window(&mut self, window_id: WindowId) {
+        self.windows.remove(&window_id);
     }
 
-    pub fn window(&self) -> &WinitWindow {
-        self.startup_window()
+    pub fn window_size(&self, window_id: WindowId) -> Size<i32, Physical> {
+        self.windows
+            .get(&window_id)
+            .expect("host window is missing")
+            .window_size()
+    }
+
+    pub fn scale_factor(&self, window_id: WindowId) -> f64 {
+        self.window(window_id).scale_factor()
+    }
+
+    pub fn window(&self, window_id: WindowId) -> &WinitWindow {
+        &self
+            .windows
+            .get(&window_id)
+            .expect("host window is missing")
+            .window
     }
 
     pub fn bind(
         &mut self,
+        window_id: WindowId,
     ) -> Result<
         (
             &mut GlesRenderer,
@@ -188,7 +298,6 @@ impl HostGraphicsBackend {
         ),
         SwapBuffersError,
     > {
-        let window_id = self.startup_window_id;
         let Self {
             renderer, windows, ..
         } = self;
@@ -210,12 +319,13 @@ impl HostGraphicsBackend {
 
     pub fn submit(
         &mut self,
+        window_id: WindowId,
         damage: Option<&[Rectangle<i32, Physical>]>,
     ) -> Result<(), SwapBuffersError> {
         let window = self
             .windows
-            .get_mut(&self.startup_window_id)
-            .expect("startup host window is missing");
+            .get_mut(&window_id)
+            .expect("host window is missing");
         let mut damage = match damage {
             Some(damage) if self.damage_tracking && !damage.is_empty() => {
                 let bind_size = window
@@ -239,14 +349,6 @@ impl HostGraphicsBackend {
         window.egl_surface.swap_buffers(damage.as_deref_mut())?;
         Ok(())
     }
-
-    fn startup_window(&self) -> &WinitWindow {
-        &self
-            .windows
-            .get(&self.startup_window_id)
-            .expect("startup host window is missing")
-            .window
-    }
 }
 
 impl HostRenderWindow {
@@ -259,6 +361,7 @@ impl HostRenderWindow {
 #[derive(Debug)]
 pub struct HostEventLoop {
     inner: HostEventLoopInner,
+    requests: Rc<RefCell<VecDeque<HostWindowRequest>>>,
     fake_token: Option<Token>,
     pending_events: Vec<HostEvent>,
     event_loop: Generic<WinitEventLoop<()>>,
@@ -278,6 +381,7 @@ impl HostEventLoop {
             Some(Duration::ZERO),
             &mut HostEventLoopApp {
                 inner: &mut self.inner,
+                requests: &self.requests,
                 callback,
             },
         )
@@ -301,6 +405,7 @@ struct HostEventWindow {
 
 struct HostEventLoopApp<'a, F: FnMut(HostEvent)> {
     inner: &'a mut HostEventLoopInner,
+    requests: &'a Rc<RefCell<VecDeque<HostWindowRequest>>>,
     callback: F,
 }
 
@@ -316,16 +421,76 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
     fn window_mut(&mut self, window_id: WindowId) -> Option<&mut HostEventWindow> {
         self.inner.windows.get_mut(&window_id)
     }
+
+    fn drain_window_requests(&mut self, event_loop: &ActiveEventLoop) {
+        let requests = self.requests.borrow_mut().drain(..).collect::<Vec<_>>();
+        for request in requests {
+            match request {
+                HostWindowRequest::Create {
+                    auto_window_id,
+                    attributes,
+                } => match event_loop.create_window(attributes) {
+                    Ok(window) => {
+                        let window = Arc::new(window);
+                        let window_id = window.id();
+                        let scale_factor = window.scale_factor();
+                        let size = {
+                            let (w, h): (i32, i32) = window.inner_size().into();
+                            Size::from((w, h))
+                        };
+                        let is_x11 = matches!(
+                            window.window_handle().map(|handle| handle.as_raw()),
+                            Ok(RawWindowHandle::Xlib(_))
+                        );
+                        self.inner.windows.insert(
+                            window_id,
+                            HostEventWindow {
+                                window: window.clone(),
+                                is_x11,
+                                scale_factor,
+                            },
+                        );
+                        (self.callback)(HostEvent::WindowCreated {
+                            auto_window_id,
+                            window_id,
+                            window,
+                            size,
+                            scale_factor,
+                        });
+                    }
+                    Err(err) => {
+                        (self.callback)(HostEvent::WindowCreateFailed {
+                            auto_window_id,
+                            error: err.to_string(),
+                        });
+                    }
+                },
+                HostWindowRequest::Close { window_id } => {
+                    self.inner.windows.remove(&window_id);
+                    (self.callback)(HostEvent::WindowClosed { window_id });
+                }
+            }
+        }
+    }
 }
 
 impl<F: FnMut(HostEvent)> ApplicationHandler for HostEventLoopApp<'_, F> {
-    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.drain_window_requests(event_loop);
         (self.callback)(HostEvent::Input {
             window_id: self.inner.startup_window_id,
             event: InputEvent::DeviceAdded {
                 device: HostVirtualDevice,
             },
         });
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.drain_window_requests(event_loop);
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+        self.drain_window_requests(event_loop);
     }
 
     fn window_event(
@@ -526,6 +691,20 @@ impl EventSource for HostEventLoop {
 
 #[derive(Debug)]
 pub enum HostEvent {
+    WindowCreated {
+        auto_window_id: AutoWindowId,
+        window_id: WindowId,
+        window: Arc<WinitWindow>,
+        size: Size<i32, Physical>,
+        scale_factor: f64,
+    },
+    WindowCreateFailed {
+        auto_window_id: AutoWindowId,
+        error: String,
+    },
+    WindowClosed {
+        window_id: WindowId,
+    },
     Resized {
         window_id: WindowId,
         size: Size<i32, Physical>,

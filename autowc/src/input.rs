@@ -299,7 +299,7 @@ impl AutoWC {
                 let host_pos: Point<f64, Physical> = (event.x(), event.y()).into();
                 let pointer = self.seat.get_pointer().unwrap();
 
-                let (pos, under) = if let Some(pos) = self.host_to_virtual(host_pos) {
+                let (pos, under) = if let Some(pos) = self.host_to_virtual(window_id, host_pos) {
                     self.pointer_in_viewport = true;
                     (pos, self.surface_under(window_id, pos))
                 } else {

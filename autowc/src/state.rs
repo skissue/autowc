@@ -11,6 +11,7 @@ use smithay::{
     backend::input::{ButtonState, KeyState},
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
     input::{Seat, SeatState},
+    output::Output,
     reexports::{
         calloop::{generic::Generic, EventLoop, Interest, LoopSignal, Mode, PostAction},
         wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -19,6 +20,7 @@ use smithay::{
             protocol::wl_surface::WlSurface,
             Display, DisplayHandle,
         },
+        winit::window::WindowId as HostWindowId,
     },
     utils::{Logical, Physical, Point, Rectangle, Size, SERIAL_COUNTER},
     wayland::{
@@ -32,8 +34,9 @@ use smithay::{
 };
 
 use crate::{
+    host_winit::HostWindowRequester,
     protocol::Protocol,
-    window::{AutoWindowId, WindowRegistry},
+    window::{AutoWindowId, AutoWindowState, WindowRegistry},
 };
 
 pub struct AutoWC {
@@ -47,6 +50,7 @@ pub struct AutoWC {
     pub dynamic_resize: bool,
     pub windows: WindowRegistry,
     pub default_window_id: AutoWindowId,
+    pub host_window_requester: Option<HostWindowRequester>,
     pub host_size: Size<i32, Physical>,
     pub pointer_in_viewport: bool,
     pub child: Option<Child>,
@@ -142,6 +146,7 @@ impl AutoWC {
             dynamic_resize,
             windows,
             default_window_id,
+            host_window_requester: None,
             host_size: virtual_size.to_physical(1),
             pointer_in_viewport: false,
             child: None,
@@ -202,6 +207,7 @@ impl AutoWC {
                     unsafe {
                         display.get_mut().dispatch_clients(state).unwrap();
                     }
+                    let _ = state.display_handle.flush_clients();
                     Ok(PostAction::Continue)
                 },
             )
@@ -212,16 +218,27 @@ impl AutoWC {
 
     pub fn surface_under(
         &self,
-        _window_id: AutoWindowId,
+        window_id: AutoWindowId,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let output_loc = self
+            .windows
+            .get(window_id)
+            .map(|window| window.output_loc())
+            .unwrap_or((0, 0).into())
+            .to_f64();
+        let space_pos = pos + output_loc;
         self.space
-            .element_under(pos)
+            .element_under(space_pos)
             .and_then(|(window, location)| {
                 window
-                    .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
+                    .surface_under(space_pos - location.to_f64(), WindowSurfaceType::ALL)
                     .map(|(s, p)| (s, (p + location).to_f64()))
             })
+    }
+
+    pub fn set_host_window_requester(&mut self, requester: HostWindowRequester) {
+        self.host_window_requester = Some(requester);
     }
 
     pub fn set_host_size(&mut self, size: Size<i32, Physical>) {
@@ -241,7 +258,7 @@ impl AutoWC {
             .get(self.default_window_id)
             .and_then(|window| window.primary_window())
         {
-            self.configure_primary(primary_window);
+            self.configure_toplevel(primary_window, size);
             let toplevel = primary_window.toplevel().unwrap();
             if toplevel.is_initial_configure_sent() {
                 toplevel.send_pending_configure();
@@ -250,7 +267,7 @@ impl AutoWC {
 
         let overlays = self.overlay_windows(self.default_window_id);
         for overlay in overlays {
-            self.center_overlay(&overlay);
+            self.center_overlay(self.default_window_id, &overlay);
         }
     }
 
@@ -259,26 +276,31 @@ impl AutoWC {
         self.next_control_action_at = None;
     }
 
-    pub fn presentation_viewport(&self) -> Rectangle<i32, Physical> {
-        let host_size = self.host_size;
+    pub fn presentation_viewport(&self, window_id: AutoWindowId) -> Rectangle<i32, Physical> {
+        let host_size = self.window_host_size(window_id);
         if host_size.w <= 0 || host_size.h <= 0 {
             return Rectangle::from_size((0, 0).into());
         }
 
-        let scale_x = host_size.w as f64 / self.virtual_size.w as f64;
-        let scale_y = host_size.h as f64 / self.virtual_size.h as f64;
+        let virtual_size = self.window_virtual_size(window_id);
+        let scale_x = host_size.w as f64 / virtual_size.w as f64;
+        let scale_y = host_size.h as f64 / virtual_size.h as f64;
         let scale = scale_x.min(scale_y);
 
-        let width = (self.virtual_size.w as f64 * scale).round() as i32;
-        let height = (self.virtual_size.h as f64 * scale).round() as i32;
+        let width = (virtual_size.w as f64 * scale).round() as i32;
+        let height = (virtual_size.h as f64 * scale).round() as i32;
         let x = (host_size.w - width) / 2;
         let y = (host_size.h - height) / 2;
 
         Rectangle::new((x, y).into(), (width, height).into())
     }
 
-    pub fn host_to_virtual(&self, pos: Point<f64, Physical>) -> Option<Point<f64, Logical>> {
-        let viewport = self.presentation_viewport();
+    pub fn host_to_virtual(
+        &self,
+        window_id: AutoWindowId,
+        pos: Point<f64, Physical>,
+    ) -> Option<Point<f64, Logical>> {
+        let viewport = self.presentation_viewport(window_id);
         if viewport.size.w <= 0 || viewport.size.h <= 0 {
             return None;
         }
@@ -289,40 +311,156 @@ impl AutoWC {
             return None;
         }
 
-        let scale_x = viewport.size.w as f64 / self.virtual_size.w as f64;
-        let scale_y = viewport.size.h as f64 / self.virtual_size.h as f64;
+        let virtual_size = self.window_virtual_size(window_id);
+        let scale_x = viewport.size.w as f64 / virtual_size.w as f64;
+        let scale_y = viewport.size.h as f64 / virtual_size.h as f64;
         Some(Point::from((x / scale_x, y / scale_y)))
     }
 
     pub fn map_new_toplevel(&mut self, window: Window) {
-        let window_id = self.default_window_id;
-        if !self
+        let window_id = if !self
             .windows
-            .get(window_id)
+            .get(self.default_window_id)
             .expect("default AutoWC window is missing")
             .has_primary_window()
         {
-            self.configure_primary(&window);
-            self.space.map_element(window.clone(), (0, 0), false);
-            self.windows
-                .get_mut(window_id)
-                .expect("default AutoWC window is missing")
-                .set_primary_window(window.clone());
-            self.focus_window(window_id, Some(&window));
-            return;
-        }
+            self.default_window_id
+        } else {
+            self.windows.create_window()
+        };
 
-        self.configure_overlay(&window);
-        self.space.map_element(window.clone(), (0, 0), false);
+        self.configure_probe(&window);
+        window.toplevel().unwrap().send_configure();
         self.windows
             .get_mut(window_id)
-            .expect("default AutoWC window is missing")
-            .push_overlay_window(window.clone());
-        self.focus_window(window_id, Some(&window));
+            .expect("AutoWC window is missing")
+            .set_primary_window(window.clone());
+        self.windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .set_state(AutoWindowState::WaitingProbeCommit);
+    }
+
+    pub fn handle_toplevel_commit(&mut self, surface: &WlSurface) {
+        let Some(window_id) = self.windows.find_id_by_surface(surface) else {
+            return;
+        };
+        let Some(window) = self
+            .windows
+            .get(window_id)
+            .and_then(|auto_window| auto_window.primary_window())
+            .cloned()
+        else {
+            return;
+        };
+
+        match self
+            .windows
+            .get(window_id)
+            .expect("AutoWC window is missing")
+            .state()
+        {
+            AutoWindowState::WaitingProbeCommit => {
+                let preferred_size = self.preferred_toplevel_size(&window);
+                if let Some(requester) = &self.host_window_requester {
+                    requester.create_window(window_id, preferred_size);
+                    self.windows
+                        .get_mut(window_id)
+                        .expect("AutoWC window is missing")
+                        .set_state(AutoWindowState::WaitingHostWindow);
+                } else {
+                    eprintln!("AutoWC cannot create host window: winit backend is not initialized");
+                }
+            }
+            AutoWindowState::WaitingFinalCommit => {
+                self.map_configured_window(window_id);
+            }
+            AutoWindowState::Mapped => {
+                if self
+                    .windows
+                    .get(window_id)
+                    .expect("AutoWC window is missing")
+                    .find_overlay_by_surface(surface)
+                    .is_some()
+                {
+                    self.center_overlay(window_id, &window);
+                }
+            }
+            AutoWindowState::Empty | AutoWindowState::WaitingHostWindow => {}
+        }
+    }
+
+    pub fn bind_host_window(
+        &mut self,
+        window_id: AutoWindowId,
+        host_window_id: HostWindowId,
+        output: Output,
+        host_size: Size<i32, Physical>,
+        virtual_size: Size<i32, Logical>,
+    ) {
+        let Some(window) = self
+            .windows
+            .get(window_id)
+            .and_then(|auto_window| auto_window.primary_window())
+            .cloned()
+        else {
+            return;
+        };
+
+        self.windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .set_host_window(host_window_id, output, host_size, virtual_size);
+
+        if self.preferred_toplevel_size(&window) == virtual_size {
+            self.configure_toplevel(&window, virtual_size);
+            window.toplevel().unwrap().send_pending_configure();
+            self.map_configured_window(window_id);
+        } else {
+            self.configure_toplevel(&window, virtual_size);
+            window.toplevel().unwrap().send_pending_configure();
+            self.windows
+                .get_mut(window_id)
+                .expect("AutoWC window is missing")
+                .set_state(AutoWindowState::WaitingFinalCommit);
+        }
+    }
+
+    pub fn resize_window_host(
+        &mut self,
+        window_id: AutoWindowId,
+        host_size: Size<i32, Physical>,
+        virtual_size: Size<i32, Logical>,
+    ) {
+        if host_size.w <= 0 || host_size.h <= 0 || virtual_size.w <= 0 || virtual_size.h <= 0 {
+            return;
+        }
+        let auto_window = self
+            .windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing");
+        auto_window.set_host_size(host_size);
+        auto_window.set_virtual_size(virtual_size);
+        let Some(window) = self
+            .windows
+            .get(window_id)
+            .and_then(|auto_window| auto_window.primary_window())
+            .cloned()
+        else {
+            return;
+        };
+        self.configure_toplevel(&window, virtual_size);
+        let toplevel = window.toplevel().unwrap();
+        if toplevel.is_initial_configure_sent() {
+            toplevel.send_pending_configure();
+        }
     }
 
     pub fn remove_toplevel(&mut self, surface: &WlSurface) {
-        let window_id = self.default_window_id;
+        let Some(window_id) = self.windows.find_id_by_surface(surface) else {
+            self.maybe_exit_when_empty();
+            return;
+        };
         let primary_matches = self
             .windows
             .get(window_id)
@@ -333,10 +471,19 @@ impl AutoWC {
             if let Some(window) = self
                 .windows
                 .get_mut(window_id)
-                .expect("default AutoWC window is missing")
+                .expect("AutoWC window is missing")
                 .take_primary_window()
             {
                 self.space.unmap_elem(&window);
+            }
+            if let Some(host_window_id) = self
+                .windows
+                .get(window_id)
+                .and_then(|window| window.host_window_id())
+            {
+                if let Some(requester) = &self.host_window_requester {
+                    requester.close_window(host_window_id);
+                }
             }
             self.promote_overlay(window_id);
             self.maybe_exit_when_empty();
@@ -346,14 +493,14 @@ impl AutoWC {
         if let Some(window) = self
             .windows
             .get_mut(window_id)
-            .expect("default AutoWC window is missing")
+            .expect("AutoWC window is missing")
             .remove_overlay_by_surface(surface)
         {
             self.space.unmap_elem(&window);
             let next_focus = self
                 .windows
                 .get(window_id)
-                .expect("default AutoWC window is missing")
+                .expect("AutoWC window is missing")
                 .next_focus_window();
             self.focus_window(window_id, next_focus.as_ref());
         }
@@ -381,30 +528,7 @@ impl AutoWC {
         }
     }
 
-    pub fn handle_toplevel_commit(&mut self, surface: &WlSurface) {
-        if let Some(window) = self
-            .windows
-            .get(self.default_window_id)
-            .and_then(|auto_window| auto_window.find_overlay_by_surface(surface))
-            .cloned()
-        {
-            self.center_overlay(&window);
-        }
-    }
-
-    pub fn configure_primary(&self, window: &Window) {
-        let toplevel = window.toplevel().unwrap();
-        toplevel.with_pending_state(|state| {
-            state.states.unset(xdg_toplevel::State::Fullscreen);
-            state.states.set(xdg_toplevel::State::TiledLeft);
-            state.states.set(xdg_toplevel::State::TiledRight);
-            state.states.set(xdg_toplevel::State::TiledTop);
-            state.states.set(xdg_toplevel::State::TiledBottom);
-            state.size = Some(self.virtual_size);
-        });
-    }
-
-    pub fn configure_overlay(&self, window: &Window) {
+    pub fn configure_probe(&self, window: &Window) {
         let toplevel = window.toplevel().unwrap();
         toplevel.with_pending_state(|state| {
             state.states.unset(xdg_toplevel::State::Fullscreen);
@@ -413,6 +537,18 @@ impl AutoWC {
             state.states.unset(xdg_toplevel::State::TiledTop);
             state.states.unset(xdg_toplevel::State::TiledBottom);
             state.size = None;
+        });
+    }
+
+    pub fn configure_toplevel(&self, window: &Window, size: Size<i32, Logical>) {
+        let toplevel = window.toplevel().unwrap();
+        toplevel.with_pending_state(|state| {
+            state.states.unset(xdg_toplevel::State::Fullscreen);
+            state.states.set(xdg_toplevel::State::TiledLeft);
+            state.states.set(xdg_toplevel::State::TiledRight);
+            state.states.set(xdg_toplevel::State::TiledTop);
+            state.states.set(xdg_toplevel::State::TiledBottom);
+            state.size = Some(size);
         });
     }
 
@@ -479,20 +615,28 @@ impl AutoWC {
         let Some(window) = self
             .windows
             .get_mut(window_id)
-            .expect("default AutoWC window is missing")
+            .expect("AutoWC window is missing")
             .promote_last_overlay()
         else {
             self.focus_window(window_id, None);
             return;
         };
 
-        self.configure_primary(&window);
-        self.space.map_element(window.clone(), (0, 0), false);
+        let virtual_size = self.window_virtual_size(window_id);
+        self.configure_toplevel(&window, virtual_size);
+        self.space.map_element(
+            window.clone(),
+            self.windows
+                .get(window_id)
+                .expect("AutoWC window is missing")
+                .output_loc(),
+            false,
+        );
         self.focus_window(window_id, Some(&window));
 
         let overlays = self.overlay_windows(window_id);
         for overlay in overlays {
-            self.center_overlay(&overlay);
+            self.center_overlay(window_id, &overlay);
         }
     }
 
@@ -516,17 +660,91 @@ impl AutoWC {
         }
     }
 
-    fn center_overlay(&mut self, window: &Window) {
+    pub fn output_for_window(&self, window_id: AutoWindowId) -> Option<Output> {
+        self.windows
+            .get(window_id)
+            .and_then(|window| window.output().cloned())
+    }
+
+    pub fn window_virtual_size(&self, window_id: AutoWindowId) -> Size<i32, Logical> {
+        self.windows
+            .get(window_id)
+            .and_then(|window| window.virtual_size())
+            .unwrap_or(self.virtual_size)
+    }
+
+    pub fn window_host_size(&self, window_id: AutoWindowId) -> Size<i32, Physical> {
+        self.windows
+            .get(window_id)
+            .and_then(|window| window.host_size())
+            .unwrap_or(self.host_size)
+    }
+
+    pub fn window_output_loc(&self, window_id: AutoWindowId) -> Point<i32, Logical> {
+        self.windows
+            .get(window_id)
+            .map(|window| window.output_loc())
+            .unwrap_or((0, 0).into())
+    }
+
+    pub fn find_window_by_host_window(&self, host_window_id: HostWindowId) -> Option<AutoWindowId> {
+        self.windows.find_id_by_host_window(host_window_id)
+    }
+
+    pub fn close_host_window(&mut self, host_window_id: HostWindowId) {
+        let Some(window_id) = self.find_window_by_host_window(host_window_id) else {
+            return;
+        };
+        if let Some(window) = self
+            .windows
+            .get(window_id)
+            .and_then(|window| window.primary_window())
+        {
+            window.toplevel().unwrap().send_close();
+        }
+    }
+
+    fn map_configured_window(&mut self, window_id: AutoWindowId) {
+        let Some(window) = self
+            .windows
+            .get(window_id)
+            .and_then(|auto_window| auto_window.primary_window())
+            .cloned()
+        else {
+            return;
+        };
+        let output_loc = self.window_output_loc(window_id);
+        self.space.map_element(window.clone(), output_loc, false);
+        self.windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .set_state(AutoWindowState::Mapped);
+        self.focus_window(window_id, Some(&window));
+    }
+
+    fn preferred_toplevel_size(&self, window: &Window) -> Size<i32, Logical> {
+        let size = window.geometry().size;
+        if size.w > 0 && size.h > 0 {
+            size
+        } else {
+            self.virtual_size
+        }
+    }
+
+    fn center_overlay(&mut self, window_id: AutoWindowId, window: &Window) {
         let geometry = window.geometry();
         if geometry.size.w <= 0 || geometry.size.h <= 0 {
             return;
         }
 
+        let virtual_size = self.window_virtual_size(window_id);
+        let output_loc = self.window_output_loc(window_id);
         // TODO: Replace this with a real overlay policy. This should eventually
         // consider xdg parent/transient relationships and clamp to the output.
-        let x = ((self.virtual_size.w - geometry.size.w) / 2).max(0);
-        let y = ((self.virtual_size.h - geometry.size.h) / 2).max(0);
-        self.space.map_element(window.clone(), (x, y), false);
+        let x = ((virtual_size.w - geometry.size.w) / 2).max(0);
+        let y = ((virtual_size.h - geometry.size.h) / 2).max(0);
+        self.space
+            .map_element(window.clone(), (output_loc.x + x, output_loc.y + y), false);
     }
 }
 

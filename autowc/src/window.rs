@@ -1,4 +1,11 @@
-use smithay::{desktop::Window, reexports::wayland_server::protocol::wl_surface::WlSurface};
+use smithay::{
+    desktop::Window,
+    output::Output,
+    reexports::{
+        wayland_server::protocol::wl_surface::WlSurface, winit::window::WindowId as HostWindowId,
+    },
+    utils::{Logical, Physical, Point, Size},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AutoWindowId(u64);
@@ -17,7 +24,8 @@ impl WindowRegistry {
     pub fn create_window(&mut self) -> AutoWindowId {
         self.next_id += 1;
         let id = AutoWindowId(self.next_id);
-        self.windows.push(AutoWindow::new(id));
+        let index = self.windows.len() as i32;
+        self.windows.push(AutoWindow::new(id, index));
         id
     }
 
@@ -29,6 +37,20 @@ impl WindowRegistry {
         self.windows.iter_mut().find(|window| window.id == id)
     }
 
+    pub fn find_id_by_surface(&self, surface: &WlSurface) -> Option<AutoWindowId> {
+        self.windows
+            .iter()
+            .find(|window| window.contains_surface(surface))
+            .map(AutoWindow::id)
+    }
+
+    pub fn find_id_by_host_window(&self, host_window_id: HostWindowId) -> Option<AutoWindowId> {
+        self.windows
+            .iter()
+            .find(|window| window.host_window_id() == Some(host_window_id))
+            .map(AutoWindow::id)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.windows.iter().all(AutoWindow::is_empty)
     }
@@ -37,14 +59,26 @@ impl WindowRegistry {
 #[derive(Debug)]
 pub struct AutoWindow {
     id: AutoWindowId,
+    host_window_id: Option<HostWindowId>,
+    output: Option<Output>,
+    output_loc: Point<i32, Logical>,
+    host_size: Option<Size<i32, Physical>>,
+    virtual_size: Option<Size<i32, Logical>>,
+    state: AutoWindowState,
     primary_window: Option<Window>,
     overlay_windows: Vec<Window>,
 }
 
 impl AutoWindow {
-    fn new(id: AutoWindowId) -> Self {
+    fn new(id: AutoWindowId, index: i32) -> Self {
         Self {
             id,
+            host_window_id: None,
+            output: None,
+            output_loc: (index * 100_000, 0).into(),
+            host_size: None,
+            virtual_size: None,
+            state: AutoWindowState::Empty,
             primary_window: None,
             overlay_windows: Vec::new(),
         }
@@ -58,12 +92,61 @@ impl AutoWindow {
         self.primary_window.as_ref()
     }
 
+    pub fn host_window_id(&self) -> Option<HostWindowId> {
+        self.host_window_id
+    }
+
+    pub fn output(&self) -> Option<&Output> {
+        self.output.as_ref()
+    }
+
+    pub fn output_loc(&self) -> Point<i32, Logical> {
+        self.output_loc
+    }
+
+    pub fn virtual_size(&self) -> Option<Size<i32, Logical>> {
+        self.virtual_size
+    }
+
+    pub fn host_size(&self) -> Option<Size<i32, Physical>> {
+        self.host_size
+    }
+
+    pub fn state(&self) -> AutoWindowState {
+        self.state
+    }
+
+    pub fn set_state(&mut self, state: AutoWindowState) {
+        self.state = state;
+    }
+
     pub fn has_primary_window(&self) -> bool {
         self.primary_window.is_some()
     }
 
     pub fn set_primary_window(&mut self, window: Window) {
         self.primary_window = Some(window);
+    }
+
+    pub fn set_host_window(
+        &mut self,
+        host_window_id: HostWindowId,
+        output: Output,
+        host_size: Size<i32, Physical>,
+        virtual_size: Size<i32, Logical>,
+    ) {
+        self.host_window_id = Some(host_window_id);
+        self.output = Some(output);
+        self.host_size = Some(host_size);
+        self.virtual_size = Some(virtual_size);
+    }
+
+    pub fn set_host_size(&mut self, host_size: Size<i32, Physical>) {
+        self.host_size = Some(host_size);
+    }
+
+    pub fn set_virtual_size(&mut self, virtual_size: Size<i32, Logical>) {
+        self.virtual_size = Some(virtual_size);
     }
 
     pub fn take_primary_window(&mut self) -> Option<Window> {
@@ -116,6 +199,25 @@ impl AutoWindow {
     pub fn is_empty(&self) -> bool {
         self.primary_window.is_none() && self.overlay_windows.is_empty()
     }
+
+    fn contains_surface(&self, surface: &WlSurface) -> bool {
+        self.primary_window
+            .as_ref()
+            .is_some_and(|window| window.toplevel().unwrap().wl_surface() == surface)
+            || self
+                .overlay_windows
+                .iter()
+                .any(|window| window.toplevel().unwrap().wl_surface() == surface)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoWindowState {
+    Empty,
+    WaitingProbeCommit,
+    WaitingHostWindow,
+    WaitingFinalCommit,
+    Mapped,
 }
 
 #[cfg(test)]
