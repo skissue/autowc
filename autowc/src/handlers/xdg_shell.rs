@@ -114,9 +114,18 @@ impl AutoWC {
             return;
         };
 
-        let output = self.space.outputs().next().unwrap();
-        let output_geo = self.space.output_geometry(output).unwrap();
-        let window_geo = self.space.element_geometry(window).unwrap();
+        let Some(window_id) = self.windows.find_id_by_surface(&root) else {
+            return;
+        };
+        let Some(output) = self.output_for_window(window_id) else {
+            return;
+        };
+        let Some(output_geo) = self.space.output_geometry(&output) else {
+            return;
+        };
+        let Some(window_geo) = self.space.element_geometry(window) else {
+            return;
+        };
 
         // The target geometry for the positioner should be relative to its parent's geometry, so
         // we will compute that here.
