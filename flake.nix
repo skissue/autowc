@@ -95,6 +95,30 @@
           inherit autowc autowc-mcp;
           default = autowc;
         };
+
+      mkDevShell =
+        pkgs:
+        pkgs.mkShell {
+          nativeBuildInputs = [
+            pkgs.cargo
+            pkgs.rustc
+          ];
+
+          buildInputs = [
+            pkgs.libxkbcommon
+            pkgs.rustfmt
+
+            # Testing apps
+            pkgs.foot
+            pkgs.gtk4
+            pkgs.wev
+          ];
+
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+            pkgs.libGL
+            pkgs.wayland
+          ];
+        };
     in
     {
       overlays.default = final: _prev: mkPackages final;
@@ -105,6 +129,16 @@
           pkgs = import nixpkgs { inherit system; };
         in
         mkPackages pkgs
+      );
+
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
+          default = mkDevShell pkgs;
+        }
       );
     };
 }
