@@ -27,7 +27,7 @@ use smithay::{
 };
 
 use crate::{
-    host_winit::{self, HostEvent},
+    host::{self, HostEvent},
     screenshot,
     window::AutoWindowId,
     AutoWC,
@@ -45,7 +45,7 @@ pub fn init_winit(
         .with_title("AutoWC Bootstrap")
         .with_visible(false);
     let (mut backend, host_events, requester) =
-        host_winit::init_from_attributes(window_attributes)?;
+        host::init_from_attributes(window_attributes)?;
     state.set_host_window_requester(requester);
 
     let mut render_windows = RenderWindows::new();
@@ -61,7 +61,7 @@ pub fn init_winit(
 
 fn handle_host_event(
     state: &mut AutoWC,
-    backend: &mut host_winit::HostGraphicsBackend,
+    backend: &mut host::HostGraphicsBackend,
     render_windows: &mut RenderWindows,
     event: HostEvent,
 ) {
@@ -131,7 +131,7 @@ fn handle_host_event(
 
 fn handle_window_created(
     state: &mut AutoWC,
-    backend: &mut host_winit::HostGraphicsBackend,
+    backend: &mut host::HostGraphicsBackend,
     render_windows: &mut RenderWindows,
     auto_window_id: AutoWindowId,
     host_window_id: HostWindowId,
@@ -155,7 +155,7 @@ fn handle_window_created(
 
 fn handle_redraw(
     state: &mut AutoWC,
-    backend: &mut host_winit::HostGraphicsBackend,
+    backend: &mut host::HostGraphicsBackend,
     render_windows: &mut RenderWindows,
     host_window_id: HostWindowId,
 ) {
@@ -295,7 +295,7 @@ struct VirtualFramebuffer {
 
 fn render_host_window(
     state: &mut AutoWC,
-    backend: &mut host_winit::HostGraphicsBackend,
+    backend: &mut host::HostGraphicsBackend,
     host_window_id: HostWindowId,
     auto_window_id: AutoWindowId,
     render_window: &mut RenderWindow,

@@ -34,7 +34,7 @@ use smithay::{
 };
 
 use crate::{
-    host_winit::HostWindowRequester,
+    host::HostWindowRequester,
     protocol::Protocol,
     window::{AutoWindowId, AutoWindowState, WindowRegistry},
 };
