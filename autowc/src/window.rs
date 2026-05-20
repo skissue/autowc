@@ -165,15 +165,17 @@ impl AutoWindow {
         self.primary_window = Some(window);
     }
 
+    pub fn set_output(&mut self, output: Output) {
+        self.output = Some(output);
+    }
+
     pub fn set_host_window(
         &mut self,
         host_window_id: HostWindowId,
-        output: Output,
         host_size: Size<i32, Physical>,
         virtual_size: Size<i32, Logical>,
     ) {
         self.host_window_id = Some(host_window_id);
-        self.output = Some(output);
         self.host_size = Some(host_size);
         self.virtual_size = Some(virtual_size);
     }

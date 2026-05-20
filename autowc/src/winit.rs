@@ -15,7 +15,7 @@ use smithay::{
         },
     },
     desktop::{space::space_render_elements, Window},
-    output::{Mode, Output, PhysicalProperties, Scale as OutputScale, Subpixel},
+    output::Output,
     reexports::{
         calloop::EventLoop,
         winit::{
@@ -47,7 +47,6 @@ pub fn init_winit(
     let (mut backend, host_events, requester) =
         host_winit::init_from_attributes(window_attributes)?;
     state.set_host_window_requester(requester);
-    init_probe_output(state);
 
     let mut render_windows = RenderWindows::new();
 
@@ -182,20 +181,6 @@ fn handle_redraw(
     );
 }
 
-fn init_probe_output(state: &mut AutoWC) {
-    let output = Output::new(
-        "autowc-probe".to_string(),
-        PhysicalProperties {
-            size: (0, 0).into(),
-            subpixel: Subpixel::Unknown,
-            make: "AutoWC".into(),
-            model: "Probe".into(),
-        },
-    );
-    let _global = output.create_global::<AutoWC>(&state.display_handle);
-    update_output_mode(&output, state.initial_virtual_size.to_physical(1), 1.0);
-}
-
 struct RenderWindow {
     output: Output,
     virtual_framebuffer: Option<VirtualFramebuffer>,
@@ -227,11 +212,11 @@ impl RenderWindow {
         self.host_scale_factor = host.scale_factor;
 
         let virtual_size = host.virtual_size_for(state);
-        state.resize_window_host(auto_window_id, host.size, virtual_size);
-        update_output_mode(
-            &self.output,
-            host.output_mode_size(state.dynamic_resize, virtual_size),
-            host.output_scale(state.dynamic_resize),
+        state.resize_window_host(
+            auto_window_id,
+            host.size,
+            virtual_size,
+            host.output_scale(state),
         );
         self.damage_tracker = OutputDamageTracker::new(host.size, 1.0, Transform::Flipped180);
     }
@@ -241,29 +226,11 @@ impl RenderWindow {
 struct RenderWindows {
     by_host_window: HashMap<HostWindowId, AutoWindowId>,
     by_auto_window: HashMap<AutoWindowId, RenderWindow>,
-    next_output_id: u64,
 }
 
 impl RenderWindows {
     fn new() -> Self {
-        Self {
-            next_output_id: 1,
-            ..Self::default()
-        }
-    }
-
-    fn create_output(&mut self) -> Output {
-        let output = Output::new(
-            format!("winit-{}", self.next_output_id),
-            PhysicalProperties {
-                size: (0, 0).into(),
-                subpixel: Subpixel::Unknown,
-                make: "Smithay".into(),
-                model: "Winit".into(),
-            },
-        );
-        self.next_output_id += 1;
-        output
+        Self::default()
     }
 
     fn add_host_window(
@@ -274,21 +241,16 @@ impl RenderWindows {
         host: HostGeometry,
     ) {
         let virtual_size = host.virtual_size_for(state);
-        let output = self.create_output();
-        let _global = output.create_global::<AutoWC>(&state.display_handle);
-        update_output_mode(
-            &output,
-            host.output_mode_size(state.dynamic_resize, virtual_size),
-            host.output_scale(state.dynamic_resize),
-        );
-        state.map_output_for_window(auto_window_id, &output);
         state.bind_host_window(
             auto_window_id,
             host_window_id,
-            output.clone(),
             host.size,
             virtual_size,
+            host.output_scale(state),
         );
+        let Some(output) = state.output_for_window(auto_window_id) else {
+            return;
+        };
         self.insert(
             host_window_id,
             auto_window_id,
@@ -528,20 +490,8 @@ impl HostGeometry {
         }
     }
 
-    fn output_mode_size(
-        self,
-        dynamic_resize: bool,
-        virtual_size: Size<i32, Logical>,
-    ) -> Size<i32, Physical> {
-        if dynamic_resize {
-            self.size
-        } else {
-            virtual_size.to_physical(1)
-        }
-    }
-
-    fn output_scale(self, dynamic_resize: bool) -> f64 {
-        if dynamic_resize {
+    fn output_scale(self, state: &AutoWC) -> f64 {
+        if state.dynamic_resize {
             self.scale_factor
         } else {
             1.0
@@ -577,21 +527,6 @@ fn normalized_scale_factor(scale_factor: f64) -> f64 {
     } else {
         1.0
     }
-}
-
-fn update_output_mode(output: &Output, size: Size<i32, Physical>, scale_factor: f64) {
-    let scale_factor = normalized_scale_factor(scale_factor);
-    let mode = Mode {
-        size,
-        refresh: 60_000,
-    };
-    output.change_current_state(
-        Some(mode),
-        Some(Transform::Flipped180),
-        Some(OutputScale::Fractional(scale_factor)),
-        Some((0, 0).into()),
-    );
-    output.set_preferred(mode);
 }
 
 #[cfg(test)]
