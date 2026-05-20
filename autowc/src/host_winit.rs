@@ -1,11 +1,5 @@
 use std::{
-    cell::RefCell,
-    collections::{HashMap, VecDeque},
-    ffi::c_void,
-    io::Error as IoError,
-    path::PathBuf,
-    rc::Rc,
-    sync::Arc,
+    collections::HashMap, ffi::c_void, io::Error as IoError, path::PathBuf, sync::Arc,
     time::Duration,
 };
 
@@ -48,7 +42,7 @@ use crate::window::AutoWindowId;
 pub fn init_from_attributes(
     attributes: WindowAttributes,
 ) -> Result<(HostGraphicsBackend, HostEventLoop, HostWindowRequester), Box<dyn std::error::Error>> {
-    let event_loop = WinitEventLoop::builder().build()?;
+    let event_loop = WinitEventLoop::<HostWindowRequest>::with_user_event().build()?;
     let event_loop_proxy = event_loop.create_proxy();
 
     #[allow(deprecated)]
@@ -66,7 +60,6 @@ pub fn init_from_attributes(
     let scale_factor = window.scale_factor();
     let startup_window_id = window.id();
     let event_loop = Generic::new(event_loop, Interest::READ, Mode::Level);
-    let requests = Rc::new(RefCell::new(VecDeque::new()));
 
     let mut render_windows = HashMap::new();
     render_windows.insert(
@@ -104,15 +97,11 @@ pub fn init_from_attributes(
                 clock: Clock::<Monotonic>::new(),
                 key_counter: 0,
             },
-            requests: requests.clone(),
             fake_token: None,
             pending_events: Vec::new(),
             event_loop,
         },
-        HostWindowRequester {
-            requests,
-            event_loop_proxy,
-        },
+        HostWindowRequester { event_loop_proxy },
     ))
 }
 
@@ -188,8 +177,7 @@ fn create_window_egl_surface(
 
 #[derive(Clone, Debug)]
 pub struct HostWindowRequester {
-    requests: Rc<RefCell<VecDeque<HostWindowRequest>>>,
-    event_loop_proxy: WinitEventLoopProxy<()>,
+    event_loop_proxy: WinitEventLoopProxy<HostWindowRequest>,
 }
 
 impl HostWindowRequester {
@@ -203,20 +191,16 @@ impl HostWindowRequester {
             .with_inner_size(LogicalSize::new(size.w, size.h))
             .with_title("AutoWC")
             .with_visible(true);
-        self.requests
-            .borrow_mut()
-            .push_back(HostWindowRequest::Create {
-                auto_window_id,
-                attributes,
-            });
-        let _ = self.event_loop_proxy.send_event(());
+        let _ = self.event_loop_proxy.send_event(HostWindowRequest::Create {
+            auto_window_id,
+            attributes,
+        });
     }
 
     pub fn close_window(&self, window_id: WindowId) {
-        self.requests
-            .borrow_mut()
-            .push_back(HostWindowRequest::Close { window_id });
-        let _ = self.event_loop_proxy.send_event(());
+        let _ = self
+            .event_loop_proxy
+            .send_event(HostWindowRequest::Close { window_id });
     }
 }
 
@@ -361,10 +345,9 @@ impl HostRenderWindow {
 #[derive(Debug)]
 pub struct HostEventLoop {
     inner: HostEventLoopInner,
-    requests: Rc<RefCell<VecDeque<HostWindowRequest>>>,
     fake_token: Option<Token>,
     pending_events: Vec<HostEvent>,
-    event_loop: Generic<WinitEventLoop<()>>,
+    event_loop: Generic<WinitEventLoop<HostWindowRequest>>,
 }
 
 impl HostEventLoop {
@@ -381,7 +364,6 @@ impl HostEventLoop {
             Some(Duration::ZERO),
             &mut HostEventLoopApp {
                 inner: &mut self.inner,
-                requests: &self.requests,
                 callback,
             },
         )
@@ -405,7 +387,6 @@ struct HostEventWindow {
 
 struct HostEventLoopApp<'a, F: FnMut(HostEvent)> {
     inner: &'a mut HostEventLoopInner,
-    requests: &'a Rc<RefCell<VecDeque<HostWindowRequest>>>,
     callback: F,
 }
 
@@ -422,61 +403,57 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
         self.inner.windows.get_mut(&window_id)
     }
 
-    fn drain_window_requests(&mut self, event_loop: &ActiveEventLoop) {
-        let requests = self.requests.borrow_mut().drain(..).collect::<Vec<_>>();
-        for request in requests {
-            match request {
-                HostWindowRequest::Create {
-                    auto_window_id,
-                    attributes,
-                } => match event_loop.create_window(attributes) {
-                    Ok(window) => {
-                        let window = Arc::new(window);
-                        let window_id = window.id();
-                        let scale_factor = window.scale_factor();
-                        let size = {
-                            let (w, h): (i32, i32) = window.inner_size().into();
-                            Size::from((w, h))
-                        };
-                        let is_x11 = matches!(
-                            window.window_handle().map(|handle| handle.as_raw()),
-                            Ok(RawWindowHandle::Xlib(_))
-                        );
-                        self.inner.windows.insert(
-                            window_id,
-                            HostEventWindow {
-                                window: window.clone(),
-                                is_x11,
-                                scale_factor,
-                            },
-                        );
-                        (self.callback)(HostEvent::WindowCreated {
-                            auto_window_id,
-                            window_id,
-                            window,
-                            size,
+    fn handle_window_request(&mut self, event_loop: &ActiveEventLoop, request: HostWindowRequest) {
+        match request {
+            HostWindowRequest::Create {
+                auto_window_id,
+                attributes,
+            } => match event_loop.create_window(attributes) {
+                Ok(window) => {
+                    let window = Arc::new(window);
+                    let window_id = window.id();
+                    let scale_factor = window.scale_factor();
+                    let size = {
+                        let (w, h): (i32, i32) = window.inner_size().into();
+                        Size::from((w, h))
+                    };
+                    let is_x11 = matches!(
+                        window.window_handle().map(|handle| handle.as_raw()),
+                        Ok(RawWindowHandle::Xlib(_))
+                    );
+                    self.inner.windows.insert(
+                        window_id,
+                        HostEventWindow {
+                            window: window.clone(),
+                            is_x11,
                             scale_factor,
-                        });
-                    }
-                    Err(err) => {
-                        (self.callback)(HostEvent::WindowCreateFailed {
-                            auto_window_id,
-                            error: err.to_string(),
-                        });
-                    }
-                },
-                HostWindowRequest::Close { window_id } => {
-                    self.inner.windows.remove(&window_id);
-                    (self.callback)(HostEvent::WindowClosed { window_id });
+                        },
+                    );
+                    (self.callback)(HostEvent::WindowCreated {
+                        auto_window_id,
+                        window_id,
+                        window,
+                        size,
+                        scale_factor,
+                    });
                 }
+                Err(err) => {
+                    (self.callback)(HostEvent::WindowCreateFailed {
+                        auto_window_id,
+                        error: err.to_string(),
+                    });
+                }
+            },
+            HostWindowRequest::Close { window_id } => {
+                self.inner.windows.remove(&window_id);
+                (self.callback)(HostEvent::WindowClosed { window_id });
             }
         }
     }
 }
 
-impl<F: FnMut(HostEvent)> ApplicationHandler for HostEventLoopApp<'_, F> {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        self.drain_window_requests(event_loop);
+impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoopApp<'_, F> {
+    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
         (self.callback)(HostEvent::Input {
             window_id: self.inner.startup_window_id,
             event: InputEvent::DeviceAdded {
@@ -485,12 +462,8 @@ impl<F: FnMut(HostEvent)> ApplicationHandler for HostEventLoopApp<'_, F> {
         });
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.drain_window_requests(event_loop);
-    }
-
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
-        self.drain_window_requests(event_loop);
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, request: HostWindowRequest) {
+        self.handle_window_request(event_loop, request);
     }
 
     fn window_event(
