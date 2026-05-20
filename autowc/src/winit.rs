@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use smithay::{
     backend::{
@@ -53,117 +53,133 @@ pub fn init_winit(
 
     event_loop
         .handle()
-        .insert_source(host_events, move |event, _, state| match event {
-            HostEvent::WindowCreated {
-                auto_window_id,
-                window_id,
-                window,
-                size,
-                scale_factor,
-            } => {
-                if let Err(err) = backend.add_window(window) {
-                    eprintln!("AutoWC failed to initialize host window renderer: {err}");
-                    return;
-                }
-
-                let host = HostGeometry::new(size, scale_factor);
-                let virtual_size = if state.dynamic_resize {
-                    host.virtual_size()
-                } else {
-                    state.initial_virtual_size
-                };
-                let output = render_windows.create_output();
-                let _global = output.create_global::<AutoWC>(&state.display_handle);
-                update_output_mode(
-                    &output,
-                    host.output_mode_size(state.dynamic_resize, virtual_size),
-                    host.output_scale(state.dynamic_resize),
-                );
-                state.map_output_for_window(auto_window_id, &output);
-                state.bind_host_window(
-                    auto_window_id,
-                    window_id,
-                    output.clone(),
-                    host.size,
-                    virtual_size,
-                );
-
-                render_windows.insert(
-                    window_id,
-                    auto_window_id,
-                    RenderWindow::new(output, host.size, host.scale_factor),
-                );
-
-                backend.window(window_id).request_redraw();
-            }
-            HostEvent::WindowCreateFailed {
-                auto_window_id,
-                error,
-            } => {
-                eprintln!("AutoWC failed to create host window {auto_window_id:?}: {error}");
-            }
-            HostEvent::WindowClosed { window_id } => {
-                backend.remove_window(window_id);
-                render_windows.remove_host_window(window_id);
-            }
-            HostEvent::Resized {
-                window_id,
-                size,
-                scale_factor,
-                ..
-            } => {
-                let Some((auto_window_id, render_window)) =
-                    render_windows.get_by_host_window_mut(window_id)
-                else {
-                    return;
-                };
-                handle_host_resize(state, auto_window_id, render_window, size, scale_factor);
-            }
-            HostEvent::Input { window_id, event } => {
-                if let Some(auto_window_id) = render_windows.auto_window_id(window_id) {
-                    state.process_input_event(auto_window_id, event);
-                }
-            }
-            HostEvent::Redraw { window_id } => {
-                let Some((auto_window_id, render_window)) =
-                    render_windows.get_by_host_window_mut(window_id)
-                else {
-                    return;
-                };
-
-                let size = backend.window_size(window_id);
-                let scale_factor = backend.scale_factor(window_id);
-                if size != render_window.host_size
-                    || scale_factor != render_window.host_scale_factor
-                {
-                    handle_host_resize(state, auto_window_id, render_window, size, scale_factor);
-                }
-
-                render_host_window(
-                    state,
-                    &mut backend,
-                    window_id,
-                    auto_window_id,
-                    render_window,
-                    size,
-                );
-            }
-            HostEvent::CloseRequested { window_id } => {
-                state.close_host_window(window_id);
-            }
-            HostEvent::Focus { window_id, focused } => {
-                let Some(auto_window_id) = render_windows.auto_window_id(window_id) else {
-                    return;
-                };
-                if focused {
-                    state.focus_auto_window(auto_window_id);
-                } else {
-                    state.blur_auto_window(auto_window_id);
-                }
-            }
+        .insert_source(host_events, move |event, _, state| {
+            handle_host_event(state, &mut backend, &mut render_windows, event);
         })?;
 
     Ok(())
+}
+
+fn handle_host_event(
+    state: &mut AutoWC,
+    backend: &mut host_winit::HostGraphicsBackend,
+    render_windows: &mut RenderWindows,
+    event: HostEvent,
+) {
+    match event {
+        HostEvent::WindowCreated {
+            auto_window_id,
+            window_id,
+            window,
+            size,
+            scale_factor,
+        } => handle_window_created(
+            state,
+            backend,
+            render_windows,
+            auto_window_id,
+            window_id,
+            window,
+            size,
+            scale_factor,
+        ),
+        HostEvent::WindowCreateFailed {
+            auto_window_id,
+            error,
+        } => {
+            eprintln!("AutoWC failed to create host window {auto_window_id:?}: {error}");
+        }
+        HostEvent::WindowClosed { window_id } => {
+            backend.remove_window(window_id);
+            render_windows.remove_host_window(window_id);
+        }
+        HostEvent::Resized {
+            window_id,
+            size,
+            scale_factor,
+            ..
+        } => {
+            let Some((auto_window_id, render_window)) =
+                render_windows.get_by_host_window_mut(window_id)
+            else {
+                return;
+            };
+            render_window.resize_host(state, auto_window_id, size, scale_factor);
+        }
+        HostEvent::Input { window_id, event } => {
+            if let Some(auto_window_id) = render_windows.auto_window_id(window_id) {
+                state.process_input_event(auto_window_id, event);
+            }
+        }
+        HostEvent::Redraw { window_id } => {
+            handle_redraw(state, backend, render_windows, window_id);
+        }
+        HostEvent::CloseRequested { window_id } => {
+            state.close_host_window(window_id);
+        }
+        HostEvent::Focus { window_id, focused } => {
+            let Some(auto_window_id) = render_windows.auto_window_id(window_id) else {
+                return;
+            };
+            if focused {
+                state.focus_auto_window(auto_window_id);
+            } else {
+                state.blur_auto_window(auto_window_id);
+            }
+        }
+    }
+}
+
+fn handle_window_created(
+    state: &mut AutoWC,
+    backend: &mut host_winit::HostGraphicsBackend,
+    render_windows: &mut RenderWindows,
+    auto_window_id: AutoWindowId,
+    host_window_id: HostWindowId,
+    window: Arc<WinitWindow>,
+    size: Size<i32, Physical>,
+    scale_factor: f64,
+) {
+    if let Err(err) = backend.add_window(window) {
+        eprintln!("AutoWC failed to initialize host window renderer: {err}");
+        return;
+    }
+
+    render_windows.add_host_window(
+        state,
+        host_window_id,
+        auto_window_id,
+        HostGeometry::new(size, scale_factor),
+    );
+    backend.window(host_window_id).request_redraw();
+}
+
+fn handle_redraw(
+    state: &mut AutoWC,
+    backend: &mut host_winit::HostGraphicsBackend,
+    render_windows: &mut RenderWindows,
+    host_window_id: HostWindowId,
+) {
+    let size = backend.window_size(host_window_id);
+    let scale_factor = backend.scale_factor(host_window_id);
+    let Some((auto_window_id, render_window)) =
+        render_windows.get_by_host_window_mut(host_window_id)
+    else {
+        return;
+    };
+
+    if size != render_window.host_size || scale_factor != render_window.host_scale_factor {
+        render_window.resize_host(state, auto_window_id, size, scale_factor);
+    }
+
+    render_host_window(
+        state,
+        backend,
+        host_window_id,
+        auto_window_id,
+        render_window,
+        size,
+    );
 }
 
 fn init_probe_output(state: &mut AutoWC) {
@@ -198,6 +214,27 @@ impl RenderWindow {
             damage_tracker: OutputDamageTracker::new(host_size, 1.0, Transform::Flipped180),
         }
     }
+
+    fn resize_host(
+        &mut self,
+        state: &mut AutoWC,
+        auto_window_id: AutoWindowId,
+        size: Size<i32, Physical>,
+        scale_factor: f64,
+    ) {
+        let host = HostGeometry::new(size, scale_factor);
+        self.host_size = host.size;
+        self.host_scale_factor = host.scale_factor;
+
+        let virtual_size = host.virtual_size_for(state);
+        state.resize_window_host(auto_window_id, host.size, virtual_size);
+        update_output_mode(
+            &self.output,
+            host.output_mode_size(state.dynamic_resize, virtual_size),
+            host.output_scale(state.dynamic_resize),
+        );
+        self.damage_tracker = OutputDamageTracker::new(host.size, 1.0, Transform::Flipped180);
+    }
 }
 
 #[derive(Default)]
@@ -227,6 +264,36 @@ impl RenderWindows {
         );
         self.next_output_id += 1;
         output
+    }
+
+    fn add_host_window(
+        &mut self,
+        state: &mut AutoWC,
+        host_window_id: HostWindowId,
+        auto_window_id: AutoWindowId,
+        host: HostGeometry,
+    ) {
+        let virtual_size = host.virtual_size_for(state);
+        let output = self.create_output();
+        let _global = output.create_global::<AutoWC>(&state.display_handle);
+        update_output_mode(
+            &output,
+            host.output_mode_size(state.dynamic_resize, virtual_size),
+            host.output_scale(state.dynamic_resize),
+        );
+        state.map_output_for_window(auto_window_id, &output);
+        state.bind_host_window(
+            auto_window_id,
+            host_window_id,
+            output.clone(),
+            host.size,
+            virtual_size,
+        );
+        self.insert(
+            host_window_id,
+            auto_window_id,
+            RenderWindow::new(output, host.size, host.scale_factor),
+        );
     }
 
     fn insert(
@@ -432,31 +499,6 @@ fn write_pending_screenshots(
     }
 }
 
-fn handle_host_resize(
-    state: &mut AutoWC,
-    auto_window_id: AutoWindowId,
-    render_window: &mut RenderWindow,
-    size: Size<i32, Physical>,
-    scale_factor: f64,
-) {
-    let host = HostGeometry::new(size, scale_factor);
-    render_window.host_size = host.size;
-    render_window.host_scale_factor = host.scale_factor;
-
-    let virtual_size = if state.dynamic_resize {
-        host.virtual_size()
-    } else {
-        state.initial_virtual_size
-    };
-    state.resize_window_host(auto_window_id, host.size, virtual_size);
-    update_output_mode(
-        &render_window.output,
-        host.output_mode_size(state.dynamic_resize, virtual_size),
-        host.output_scale(state.dynamic_resize),
-    );
-    render_window.damage_tracker = OutputDamageTracker::new(host.size, 1.0, Transform::Flipped180);
-}
-
 #[derive(Clone, Copy)]
 struct HostGeometry {
     size: Size<i32, Physical>,
@@ -476,6 +518,14 @@ impl HostGeometry {
             .to_f64()
             .to_logical(self.scale_factor)
             .to_i32_ceil()
+    }
+
+    fn virtual_size_for(self, state: &AutoWC) -> Size<i32, Logical> {
+        if state.dynamic_resize {
+            self.virtual_size()
+        } else {
+            state.initial_virtual_size
+        }
     }
 
     fn output_mode_size(
