@@ -54,6 +54,13 @@ impl WindowRegistry {
     pub fn is_empty(&self) -> bool {
         self.windows.iter().all(AutoWindow::is_empty)
     }
+
+    pub fn mapped_windows(&self) -> Vec<Window> {
+        self.windows
+            .iter()
+            .flat_map(AutoWindow::mapped_windows)
+            .collect()
+    }
 }
 
 #[derive(Debug)]

@@ -50,6 +50,7 @@ pub struct AutoWC {
     pub dynamic_resize: bool,
     pub windows: WindowRegistry,
     pub default_window_id: AutoWindowId,
+    pub focused_window_id: Option<AutoWindowId>,
     pub host_window_requester: Option<HostWindowRequester>,
     pub host_size: Size<i32, Physical>,
     pub pointer_in_viewport: bool,
@@ -146,6 +147,7 @@ impl AutoWC {
             dynamic_resize,
             windows,
             default_window_id,
+            focused_window_id: None,
             host_window_requester: None,
             host_size: virtual_size.to_physical(1),
             pointer_in_viewport: false,
@@ -218,23 +220,23 @@ impl AutoWC {
 
     pub fn surface_under(
         &self,
-        window_id: AutoWindowId,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        let output_loc = self
-            .windows
-            .get(window_id)
-            .map(|window| window.output_loc())
-            .unwrap_or((0, 0).into())
-            .to_f64();
-        let space_pos = pos + output_loc;
         self.space
-            .element_under(space_pos)
+            .element_under(pos)
             .and_then(|(window, location)| {
                 window
-                    .surface_under(space_pos - location.to_f64(), WindowSurfaceType::ALL)
+                    .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
                     .map(|(s, p)| (s, (p + location).to_f64()))
             })
+    }
+
+    pub fn window_local_to_space(
+        &self,
+        window_id: AutoWindowId,
+        pos: Point<f64, Logical>,
+    ) -> Point<f64, Logical> {
+        pos + self.window_output_loc(window_id).to_f64()
     }
 
     pub fn set_host_window_requester(&mut self, requester: HostWindowRequester) {
@@ -560,7 +562,7 @@ impl AutoWC {
             self.space.raise_element(window, true);
         }
 
-        for window in self.mapped_windows(window_id) {
+        for window in self.mapped_windows() {
             let toplevel = window.toplevel().unwrap();
             let activated = surface
                 .as_ref()
@@ -570,8 +572,23 @@ impl AutoWC {
             }
         }
 
+        self.focused_window_id = surface.as_ref().map(|_| window_id);
         let keyboard = self.seat.get_keyboard().unwrap();
         keyboard.set_focus(self, surface, serial);
+    }
+
+    pub fn focus_auto_window(&mut self, window_id: AutoWindowId) {
+        let window = self
+            .windows
+            .get(window_id)
+            .and_then(|window| window.next_focus_window());
+        self.focus_window(window_id, window.as_ref());
+    }
+
+    pub fn blur_auto_window(&mut self, window_id: AutoWindowId) {
+        if self.focused_window_id == Some(window_id) {
+            self.focus_window(window_id, None);
+        }
     }
 
     pub fn queue_screenshot(&mut self, window_id: AutoWindowId, path: Option<PathBuf>) {
@@ -640,11 +657,15 @@ impl AutoWC {
         }
     }
 
-    pub fn mapped_windows(&self, window_id: AutoWindowId) -> Vec<Window> {
+    pub fn mapped_windows_for(&self, window_id: AutoWindowId) -> Vec<Window> {
         self.windows
             .get(window_id)
             .map(|window| window.mapped_windows())
             .unwrap_or_default()
+    }
+
+    pub fn mapped_windows(&self) -> Vec<Window> {
+        self.windows.mapped_windows()
     }
 
     fn overlay_windows(&self, window_id: AutoWindowId) -> Vec<Window> {

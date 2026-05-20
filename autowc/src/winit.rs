@@ -182,7 +182,14 @@ pub fn init_winit(
                 state.close_host_window(window_id);
             }
             HostEvent::Focus { window_id, focused } => {
-                let _ = (window_id, focused);
+                let Some(auto_window_id) = host_windows.get(&window_id).copied() else {
+                    return;
+                };
+                if focused {
+                    state.focus_auto_window(auto_window_id);
+                } else {
+                    state.blur_auto_window(auto_window_id);
+                }
             }
         })?;
 
@@ -330,7 +337,7 @@ fn render_host_window(
     backend.submit(host_window_id, Some(&[damage])).unwrap();
 
     if let Some(output) = state.output_for_window(auto_window_id) {
-        for window in state.mapped_windows(auto_window_id) {
+        for window in state.mapped_windows_for(auto_window_id) {
             window.send_frame(
                 &output,
                 state.start_time.elapsed(),

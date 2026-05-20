@@ -230,7 +230,8 @@ impl AutoWC {
     ) {
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.seat.get_pointer().unwrap();
-        let under = self.surface_under(window_id, pos);
+        let pos = self.window_local_to_space(window_id, pos);
+        let under = self.surface_under(pos);
 
         pointer.motion(
             self,
@@ -281,6 +282,8 @@ impl AutoWC {
     ) {
         match event {
             InputEvent::Keyboard { event, .. } => {
+                self.focus_auto_window(window_id);
+
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = self.now_msec();
 
@@ -301,7 +304,8 @@ impl AutoWC {
 
                 let (pos, under) = if let Some(pos) = self.host_to_virtual(window_id, host_pos) {
                     self.pointer_in_viewport = true;
-                    (pos, self.surface_under(window_id, pos))
+                    let pos = self.window_local_to_space(window_id, pos);
+                    (pos, self.surface_under(pos))
                 } else {
                     self.pointer_in_viewport = false;
                     (pointer.current_location(), None)
