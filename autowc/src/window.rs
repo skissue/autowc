@@ -10,6 +10,16 @@ use smithay::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AutoWindowId(u64);
 
+impl AutoWindowId {
+    pub fn from_raw(id: u64) -> Option<Self> {
+        (id > 0).then_some(Self(id))
+    }
+
+    pub fn raw(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct WindowRegistry {
     next_id: u64,

@@ -6,7 +6,49 @@ use smithay::backend::input::{ButtonState, KeyState};
 use crate::keycodes::key_to_code;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ControlCommand {
+pub struct ControlCommand {
+    pub window: Option<u64>,
+    pub variant: ControlCommandVariant,
+}
+
+impl ControlCommand {
+    pub fn new(variant: ControlCommandVariant) -> Self {
+        Self {
+            window: None,
+            variant,
+        }
+    }
+
+    pub fn targeted(window: Option<u64>, variant: ControlCommandVariant) -> Result<Self, String> {
+        match window {
+            Some(0) => Err("window id must be greater than zero".into()),
+            Some(window) => Ok(Self {
+                window: Some(window),
+                variant,
+            }),
+            None => Ok(Self::new(variant)),
+        }
+    }
+
+    pub fn responds_with_screenshot(&self) -> bool {
+        matches!(self.variant, ControlCommandVariant::Screenshot { .. })
+    }
+}
+
+impl PartialEq<ControlCommandVariant> for ControlCommand {
+    fn eq(&self, other: &ControlCommandVariant) -> bool {
+        self.window.is_none() && self.variant == *other
+    }
+}
+
+impl PartialEq<ControlCommand> for ControlCommandVariant {
+    fn eq(&self, other: &ControlCommand) -> bool {
+        other == self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ControlCommandVariant {
     Key { code: u32, action: PressAction },
     Chord { codes: Vec<u32> },
     Text(String),
@@ -51,14 +93,16 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
     }
 
     if line == "quit" {
-        return Ok(Some(ControlCommand::Quit));
+        return Ok(Some(ControlCommand::new(ControlCommandVariant::Quit)));
     }
 
     if let Some(text) = line.strip_prefix("text") {
         let text = text
             .strip_prefix(char::is_whitespace)
             .ok_or_else(|| "usage: text <text>".to_string())?;
-        return Ok(Some(ControlCommand::Text(text.to_string())));
+        return Ok(Some(ControlCommand::new(ControlCommandVariant::Text(
+            text.to_string(),
+        ))));
     }
 
     let mut parts = line.split_whitespace();
@@ -112,8 +156,15 @@ pub fn text_to_key_events(text: &str) -> Result<Vec<(u32, PressAction)>, String>
 }
 
 #[derive(Debug, Deserialize)]
+struct JsonControlCommand {
+    window: Option<u64>,
+    #[serde(flatten)]
+    variant: JsonControlCommandVariant,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-enum JsonControlCommand {
+enum JsonControlCommandVariant {
     Key {
         key: String,
         #[serde(default = "default_json_press_action")]
@@ -154,15 +205,15 @@ enum JsonControlCommand {
 
 impl JsonControlCommand {
     fn into_control_command(self) -> Result<ControlCommand, String> {
-        match self {
-            Self::Key { key, action } => {
+        let variant = match self.variant {
+            JsonControlCommandVariant::Key { key, action } => {
                 let code = key_to_code(&key).ok_or_else(|| format!("unknown key: {key}"))?;
-                Ok(ControlCommand::Key {
+                ControlCommandVariant::Key {
                     code,
                     action: action.into(),
-                })
+                }
             }
-            Self::Chord { keys } => {
+            JsonControlCommandVariant::Chord { keys } => {
                 if keys.is_empty() {
                     return Err("chord requires at least one key".into());
                 }
@@ -171,24 +222,35 @@ impl JsonControlCommand {
                 for key in keys {
                     codes.push(key_to_code(&key).ok_or_else(|| format!("unknown key: {key}"))?);
                 }
-                Ok(ControlCommand::Chord { codes })
+                ControlCommandVariant::Chord { codes }
             }
-            Self::Text { text } => Ok(ControlCommand::Text(text)),
-            Self::MouseMove { x, y } => Ok(ControlCommand::PointerMove { x, y }),
-            Self::MouseButton { action, button } => Ok(ControlCommand::PointerButton {
-                button: parse_json_button(button)?,
-                action: action.into(),
-            }),
-            Self::Click { x, y, button } => Ok(ControlCommand::Click {
+            JsonControlCommandVariant::Text { text } => ControlCommandVariant::Text(text),
+            JsonControlCommandVariant::MouseMove { x, y } => {
+                ControlCommandVariant::PointerMove { x, y }
+            }
+            JsonControlCommandVariant::MouseButton { action, button } => {
+                ControlCommandVariant::PointerButton {
+                    button: parse_json_button(button)?,
+                    action: action.into(),
+                }
+            }
+            JsonControlCommandVariant::Click { x, y, button } => ControlCommandVariant::Click {
                 x,
                 y,
                 button: parse_json_button(button)?,
-            }),
-            Self::Scroll { dx, dy } => Ok(ControlCommand::Scroll { dx, dy }),
-            Self::Screenshot { path } => Ok(ControlCommand::Screenshot { path }),
-            Self::Sleep { ms } => Ok(ControlCommand::Sleep { duration_ms: ms }),
-            Self::Quit => Ok(ControlCommand::Quit),
-        }
+            },
+            JsonControlCommandVariant::Scroll { dx, dy } => {
+                ControlCommandVariant::Scroll { dx, dy }
+            }
+            JsonControlCommandVariant::Screenshot { path } => {
+                ControlCommandVariant::Screenshot { path }
+            }
+            JsonControlCommandVariant::Sleep { ms } => {
+                ControlCommandVariant::Sleep { duration_ms: ms }
+            }
+            JsonControlCommandVariant::Quit => ControlCommandVariant::Quit,
+        };
+        ControlCommand::targeted(self.window, variant)
     }
 }
 
@@ -242,7 +304,10 @@ fn parse_key<'a>(
     ensure_no_extra(parts)?;
 
     let code = key_to_code(key).ok_or_else(|| format!("unknown key: {key}"))?;
-    Ok(Some(ControlCommand::Key { code, action }))
+    Ok(Some(ControlCommand::new(ControlCommandVariant::Key {
+        code,
+        action,
+    })))
 }
 
 fn parse_chord<'a>(parts: impl Iterator<Item = &'a str>) -> Result<Option<ControlCommand>, String> {
@@ -256,7 +321,9 @@ fn parse_chord<'a>(parts: impl Iterator<Item = &'a str>) -> Result<Option<Contro
         codes.push(key_to_code(key).ok_or_else(|| format!("unknown key: {key}"))?);
     }
 
-    Ok(Some(ControlCommand::Chord { codes }))
+    Ok(Some(ControlCommand::new(ControlCommandVariant::Chord {
+        codes,
+    })))
 }
 
 fn parse_mouse<'a>(
@@ -267,7 +334,9 @@ fn parse_mouse<'a>(
             let x = parse_f64(parts.next(), "x")?;
             let y = parse_f64(parts.next(), "y")?;
             ensure_no_extra(parts)?;
-            Ok(Some(ControlCommand::PointerMove { x, y }))
+            Ok(Some(ControlCommand::new(
+                ControlCommandVariant::PointerMove { x, y },
+            )))
         }
         Some("button") => {
             let action = match parts.next() {
@@ -275,10 +344,12 @@ fn parse_mouse<'a>(
                 Some(button) => {
                     let parsed_button = parse_button(Some(button))?;
                     ensure_no_extra(parts)?;
-                    return Ok(Some(ControlCommand::PointerButton {
-                        button: parsed_button,
-                        action: PressAction::Press,
-                    }));
+                    return Ok(Some(ControlCommand::new(
+                        ControlCommandVariant::PointerButton {
+                            button: parsed_button,
+                            action: PressAction::Press,
+                        },
+                    )));
                 }
                 None => PressAction::Press,
             };
@@ -287,7 +358,9 @@ fn parse_mouse<'a>(
                 None => BTN_LEFT,
             };
             ensure_no_extra(parts)?;
-            Ok(Some(ControlCommand::PointerButton { button, action }))
+            Ok(Some(ControlCommand::new(
+                ControlCommandVariant::PointerButton { button, action },
+            )))
         }
         _ => Err("usage: mouse move <x> <y> | mouse button [down|up|press] [button]".into()),
     }
@@ -304,7 +377,11 @@ fn parse_click<'a>(
     };
     ensure_no_extra(parts)?;
 
-    Ok(Some(ControlCommand::Click { x, y, button }))
+    Ok(Some(ControlCommand::new(ControlCommandVariant::Click {
+        x,
+        y,
+        button,
+    })))
 }
 
 fn parse_scroll<'a>(
@@ -314,7 +391,10 @@ fn parse_scroll<'a>(
     let dy = parse_f64(parts.next(), "dy")?;
     ensure_no_extra(parts)?;
 
-    Ok(Some(ControlCommand::Scroll { dx, dy }))
+    Ok(Some(ControlCommand::new(ControlCommandVariant::Scroll {
+        dx,
+        dy,
+    })))
 }
 
 fn parse_screenshot<'a>(
@@ -323,7 +403,9 @@ fn parse_screenshot<'a>(
     let path = parts.next().map(PathBuf::from);
     ensure_no_extra(parts)?;
 
-    Ok(Some(ControlCommand::Screenshot { path }))
+    Ok(Some(ControlCommand::new(
+        ControlCommandVariant::Screenshot { path },
+    )))
 }
 
 fn parse_sleep<'a>(
@@ -336,7 +418,9 @@ fn parse_sleep<'a>(
         .map_err(|_| "invalid sleep duration".to_string())?;
     ensure_no_extra(parts)?;
 
-    Ok(Some(ControlCommand::Sleep { duration_ms }))
+    Ok(Some(ControlCommand::new(ControlCommandVariant::Sleep {
+        duration_ms,
+    })))
 }
 
 fn parse_press_action(value: Option<&str>) -> Result<PressAction, String> {
@@ -441,18 +525,22 @@ fn char_to_key(ch: char) -> Option<(u32, bool)> {
 mod tests {
     use super::*;
 
+    fn command(variant: ControlCommandVariant) -> Option<ControlCommand> {
+        Some(ControlCommand::new(variant))
+    }
+
     #[test]
     fn parses_key_command() {
         assert_eq!(
             parse_control_command("key KeyA").unwrap(),
-            Some(ControlCommand::Key {
+            command(ControlCommandVariant::Key {
                 code: key_to_code("KeyA").unwrap(),
                 action: PressAction::Press,
             })
         );
         assert_eq!(
             parse_control_command("key KeyA down").unwrap(),
-            Some(ControlCommand::Key {
+            command(ControlCommandVariant::Key {
                 code: key_to_code("KeyA").unwrap(),
                 action: PressAction::Down,
             })
@@ -463,7 +551,7 @@ mod tests {
     fn parses_chord() {
         assert_eq!(
             parse_control_command("chord ControlLeft KeyL").unwrap(),
-            Some(ControlCommand::Chord {
+            command(ControlCommandVariant::Chord {
                 codes: vec![
                     key_to_code("ControlLeft").unwrap(),
                     key_to_code("KeyL").unwrap(),
@@ -478,32 +566,32 @@ mod tests {
     fn parses_mouse_commands() {
         assert_eq!(
             parse_control_command("mouse move 10 20").unwrap(),
-            Some(ControlCommand::PointerMove { x: 10.0, y: 20.0 })
+            command(ControlCommandVariant::PointerMove { x: 10.0, y: 20.0 })
         );
         assert_eq!(
             parse_control_command("mouse button").unwrap(),
-            Some(ControlCommand::PointerButton {
+            command(ControlCommandVariant::PointerButton {
                 button: BTN_LEFT,
                 action: PressAction::Press,
             })
         );
         assert_eq!(
             parse_control_command("mouse button down").unwrap(),
-            Some(ControlCommand::PointerButton {
+            command(ControlCommandVariant::PointerButton {
                 button: BTN_LEFT,
                 action: PressAction::Down,
             })
         );
         assert_eq!(
             parse_control_command("mouse button up right").unwrap(),
-            Some(ControlCommand::PointerButton {
+            command(ControlCommandVariant::PointerButton {
                 button: BTN_RIGHT,
                 action: PressAction::Up,
             })
         );
         assert_eq!(
             parse_control_command("mouse button middle").unwrap(),
-            Some(ControlCommand::PointerButton {
+            command(ControlCommandVariant::PointerButton {
                 button: BTN_MIDDLE,
                 action: PressAction::Press,
             })
@@ -514,7 +602,7 @@ mod tests {
     fn parses_click_scroll_and_quit() {
         assert_eq!(
             parse_control_command("click 640 360").unwrap(),
-            Some(ControlCommand::Click {
+            command(ControlCommandVariant::Click {
                 x: 640.0,
                 y: 360.0,
                 button: BTN_LEFT,
@@ -522,14 +610,14 @@ mod tests {
         );
         assert_eq!(
             parse_control_command("scroll 0 -120").unwrap(),
-            Some(ControlCommand::Scroll {
+            command(ControlCommandVariant::Scroll {
                 dx: 0.0,
                 dy: -120.0,
             })
         );
         assert_eq!(
             parse_control_command("quit").unwrap(),
-            Some(ControlCommand::Quit)
+            command(ControlCommandVariant::Quit)
         );
     }
 
@@ -537,11 +625,11 @@ mod tests {
     fn parses_screenshot() {
         assert_eq!(
             parse_control_command("screenshot").unwrap(),
-            Some(ControlCommand::Screenshot { path: None })
+            command(ControlCommandVariant::Screenshot { path: None })
         );
         assert_eq!(
             parse_control_command("screenshot /tmp/autowc.png").unwrap(),
-            Some(ControlCommand::Screenshot {
+            command(ControlCommandVariant::Screenshot {
                 path: Some(PathBuf::from("/tmp/autowc.png")),
             })
         );
@@ -551,7 +639,7 @@ mod tests {
     fn parses_sleep() {
         assert_eq!(
             parse_control_command("sleep 250").unwrap(),
-            Some(ControlCommand::Sleep { duration_ms: 250 })
+            command(ControlCommandVariant::Sleep { duration_ms: 250 })
         );
         assert!(parse_control_command("sleep 1.5").is_err());
         assert!(parse_control_command("sleep -1").is_err());
@@ -561,7 +649,7 @@ mod tests {
     fn parses_text_with_spaces() {
         assert_eq!(
             parse_control_command("text hello world").unwrap(),
-            Some(ControlCommand::Text("hello world".to_string()))
+            command(ControlCommandVariant::Text("hello world".to_string()))
         );
     }
 
@@ -569,7 +657,7 @@ mod tests {
     fn plain_text_does_not_unescape_backslash_sequences() {
         assert_eq!(
             parse_control_command(r"text \n").unwrap(),
-            Some(ControlCommand::Text(r"\n".to_string()))
+            command(ControlCommandVariant::Text(r"\n".to_string()))
         );
         assert_eq!(
             text_to_key_events(r"\n").unwrap(),
@@ -584,7 +672,7 @@ mod tests {
     fn json_text_unescapes_backslash_sequences() {
         assert_eq!(
             parse_json_control_command(r#"{"type":"text","text":"\n"}"#).unwrap(),
-            ControlCommand::Text("\n".to_string())
+            ControlCommandVariant::Text("\n".to_string())
         );
         assert_eq!(
             text_to_key_events("\n").unwrap(),
@@ -614,14 +702,14 @@ mod tests {
     fn parses_json_key_commands() {
         assert_eq!(
             parse_json_control_command(r#"{"type":"key","key":"KeyA"}"#).unwrap(),
-            ControlCommand::Key {
+            ControlCommandVariant::Key {
                 code: key_to_code("KeyA").unwrap(),
                 action: PressAction::Press,
             }
         );
         assert_eq!(
             parse_json_control_command(r#"{"type":"key","key":"KeyA","action":"down"}"#).unwrap(),
-            ControlCommand::Key {
+            ControlCommandVariant::Key {
                 code: key_to_code("KeyA").unwrap(),
                 action: PressAction::Down,
             }
@@ -633,7 +721,7 @@ mod tests {
         assert_eq!(
             parse_json_control_command(r#"{"type":"chord","keys":["ControlLeft","KeyL"]}"#)
                 .unwrap(),
-            ControlCommand::Chord {
+            ControlCommandVariant::Chord {
                 codes: vec![
                     key_to_code("ControlLeft").unwrap(),
                     key_to_code("KeyL").unwrap(),
@@ -642,7 +730,7 @@ mod tests {
         );
         assert_eq!(
             parse_json_control_command(r#"{"type":"text","text":" hello\nworld "}"#).unwrap(),
-            ControlCommand::Text(" hello\nworld ".to_string())
+            ControlCommandVariant::Text(" hello\nworld ".to_string())
         );
     }
 
@@ -650,11 +738,11 @@ mod tests {
     fn parses_json_mouse_commands() {
         assert_eq!(
             parse_json_control_command(r#"{"type":"mouse_move","x":10,"y":20}"#).unwrap(),
-            ControlCommand::PointerMove { x: 10.0, y: 20.0 }
+            ControlCommandVariant::PointerMove { x: 10.0, y: 20.0 }
         );
         assert_eq!(
             parse_json_control_command(r#"{"type":"mouse_button"}"#).unwrap(),
-            ControlCommand::PointerButton {
+            ControlCommandVariant::PointerButton {
                 button: BTN_LEFT,
                 action: PressAction::Press,
             }
@@ -662,14 +750,14 @@ mod tests {
         assert_eq!(
             parse_json_control_command(r#"{"type":"mouse_button","action":"up","button":"right"}"#)
                 .unwrap(),
-            ControlCommand::PointerButton {
+            ControlCommandVariant::PointerButton {
                 button: BTN_RIGHT,
                 action: PressAction::Up,
             }
         );
         assert_eq!(
             parse_json_control_command(r#"{"type":"mouse_button","button":273}"#).unwrap(),
-            ControlCommand::PointerButton {
+            ControlCommandVariant::PointerButton {
                 button: BTN_RIGHT,
                 action: PressAction::Press,
             }
@@ -680,7 +768,7 @@ mod tests {
     fn parses_json_click_scroll_sleep_screenshot_and_quit() {
         assert_eq!(
             parse_json_control_command(r#"{"type":"click","x":640,"y":360}"#).unwrap(),
-            ControlCommand::Click {
+            ControlCommandVariant::Click {
                 x: 640.0,
                 y: 360.0,
                 button: BTN_LEFT,
@@ -688,26 +776,45 @@ mod tests {
         );
         assert_eq!(
             parse_json_control_command(r#"{"type":"scroll","dx":0,"dy":-120}"#).unwrap(),
-            ControlCommand::Scroll {
+            ControlCommandVariant::Scroll {
                 dx: 0.0,
                 dy: -120.0,
             }
         );
         assert_eq!(
             parse_json_control_command(r#"{"type":"sleep","ms":250}"#).unwrap(),
-            ControlCommand::Sleep { duration_ms: 250 }
+            ControlCommandVariant::Sleep { duration_ms: 250 }
         );
         assert_eq!(
             parse_json_control_command(r#"{"type":"screenshot","path":"/tmp/autowc.png"}"#)
                 .unwrap(),
-            ControlCommand::Screenshot {
+            ControlCommandVariant::Screenshot {
                 path: Some(PathBuf::from("/tmp/autowc.png")),
             }
         );
         assert_eq!(
             parse_json_control_command(r#"{"type":"quit"}"#).unwrap(),
-            ControlCommand::Quit
+            ControlCommandVariant::Quit
         );
+    }
+
+    #[test]
+    fn parses_json_targeted_window_commands() {
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"text","window":2,"text":"second"}"#).unwrap(),
+            ControlCommand {
+                window: Some(2),
+                variant: ControlCommandVariant::Text("second".to_string()),
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"screenshot","window":3}"#).unwrap(),
+            ControlCommand {
+                window: Some(3),
+                variant: ControlCommandVariant::Screenshot { path: None },
+            }
+        );
+        assert!(parse_json_control_command(r#"{"type":"text","window":0,"text":"bad"}"#).is_err());
     }
 
     #[test]

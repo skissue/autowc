@@ -282,15 +282,13 @@ fn render_host_window(
                 .unwrap();
         }
 
-        if auto_window_id == state.default_window_id {
-            write_pending_screenshots(
-                state,
-                renderer,
-                virtual_framebuffer,
-                auto_window_id,
-                virtual_buffer_size,
-            );
-        }
+        write_pending_screenshots(
+            state,
+            renderer,
+            virtual_framebuffer,
+            auto_window_id,
+            virtual_buffer_size,
+        );
 
         let virtual_texture = TextureBuffer::from_texture(
             renderer,
@@ -358,27 +356,29 @@ fn write_pending_screenshots(
     auto_window_id: AutoWindowId,
     virtual_buffer_size: Size<i32, Buffer>,
 ) {
-    while let Some(request) = state.pending_screenshots.pop_front() {
-        let result = if request.window_id == auto_window_id {
-            renderer
-                .copy_texture(
-                    &virtual_framebuffer.texture,
-                    Rectangle::from_size(virtual_buffer_size),
-                    Fourcc::Abgr8888,
+    let mut pending = std::mem::take(&mut state.pending_screenshots);
+    while let Some(request) = pending.pop_front() {
+        if request.window_id != auto_window_id {
+            state.pending_screenshots.push_back(request);
+            continue;
+        }
+
+        let result = renderer
+            .copy_texture(
+                &virtual_framebuffer.texture,
+                Rectangle::from_size(virtual_buffer_size),
+                Fourcc::Abgr8888,
+            )
+            .and_then(|mapping| renderer.map_texture(&mapping).map(|pixels| pixels.to_vec()))
+            .map_err(|err| err.to_string())
+            .and_then(|pixels| {
+                screenshot::write_png(
+                    &request.path,
+                    &pixels,
+                    virtual_buffer_size.w as u32,
+                    virtual_buffer_size.h as u32,
                 )
-                .and_then(|mapping| renderer.map_texture(&mapping).map(|pixels| pixels.to_vec()))
-                .map_err(|err| err.to_string())
-                .and_then(|pixels| {
-                    screenshot::write_png(
-                        &request.path,
-                        &pixels,
-                        virtual_buffer_size.w as u32,
-                        virtual_buffer_size.h as u32,
-                    )
-                })
-        } else {
-            Err(format!("unknown AutoWC window {:?}", request.window_id))
-        };
+            });
 
         match result {
             Ok(()) => state

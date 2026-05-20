@@ -13,7 +13,7 @@ use smithay::{
 };
 
 use crate::{
-    control::{text_to_key_events, ControlCommand},
+    control::{text_to_key_events, ControlCommand, ControlCommandVariant},
     state::{AutoWC, QueuedControlAction, QueuedControlActionKind},
     window::AutoWindowId,
 };
@@ -34,9 +34,20 @@ pub const DEFAULT_COMMAND_INTERVAL: Duration = Duration::from_millis(DEFAULT_COM
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
-        let window_id = self.default_window_id;
-        match command {
-            ControlCommand::Key { code, action } => {
+        let window_id = match command.window {
+            Some(window) => {
+                let window_id = AutoWindowId::from_raw(window)
+                    .ok_or_else(|| "invalid window id".to_string())?;
+                if self.windows.get(window_id).is_none() {
+                    return Err(format!("unknown window: {}", window_id.raw()));
+                }
+                window_id
+            }
+            None => self.default_window_id,
+        };
+
+        match command.variant {
+            ControlCommandVariant::Key { code, action } => {
                 for state in action.key_states() {
                     self.queue_control_action(
                         window_id,
@@ -51,7 +62,7 @@ impl AutoWC {
                     );
                 }
             }
-            ControlCommand::Chord { codes } => {
+            ControlCommandVariant::Chord { codes } => {
                 let mut pressed_codes = codes.iter().peekable();
                 while let Some(code) = pressed_codes.next() {
                     self.queue_control_action(
@@ -86,7 +97,7 @@ impl AutoWC {
                     QueuedControlActionKind::Delay(self.key_event_interval),
                 );
             }
-            ControlCommand::Text(text) => {
+            ControlCommandVariant::Text(text) => {
                 for (code, action) in text_to_key_events(&text)? {
                     for state in action.key_states() {
                         self.queue_control_action(
@@ -103,10 +114,10 @@ impl AutoWC {
                     }
                 }
             }
-            ControlCommand::PointerMove { x, y } => {
+            ControlCommandVariant::PointerMove { x, y } => {
                 self.queue_control_action(window_id, QueuedControlActionKind::PointerMove { x, y });
             }
-            ControlCommand::PointerButton { button, action } => {
+            ControlCommandVariant::PointerButton { button, action } => {
                 for state in action.button_states() {
                     self.queue_control_action(
                         window_id,
@@ -117,7 +128,7 @@ impl AutoWC {
                     );
                 }
             }
-            ControlCommand::Click { x, y, button } => {
+            ControlCommandVariant::Click { x, y, button } => {
                 self.queue_control_action(window_id, QueuedControlActionKind::PointerMove { x, y });
                 self.queue_control_action(
                     window_id,
@@ -134,19 +145,19 @@ impl AutoWC {
                     },
                 );
             }
-            ControlCommand::Scroll { dx, dy } => {
+            ControlCommandVariant::Scroll { dx, dy } => {
                 self.queue_control_action(window_id, QueuedControlActionKind::Scroll { dx, dy });
             }
-            ControlCommand::Screenshot { path } => {
+            ControlCommandVariant::Screenshot { path } => {
                 self.queue_control_action(window_id, QueuedControlActionKind::Screenshot { path });
             }
-            ControlCommand::Sleep { duration_ms } => {
+            ControlCommandVariant::Sleep { duration_ms } => {
                 self.queue_control_action(
                     window_id,
                     QueuedControlActionKind::Delay(Duration::from_millis(duration_ms)),
                 );
             }
-            ControlCommand::Quit => {
+            ControlCommandVariant::Quit => {
                 self.queue_control_action(window_id, QueuedControlActionKind::Quit);
             }
         }
@@ -206,10 +217,12 @@ impl AutoWC {
 
     pub fn process_virtual_input_event(
         &mut self,
-        _window_id: AutoWindowId,
+        window_id: AutoWindowId,
         code: u32,
         state: KeyState,
     ) {
+        self.focus_auto_window(window_id);
+
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.now_msec();
 

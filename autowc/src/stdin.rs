@@ -3,7 +3,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::{control::ControlCommand, AutoWC, EventLoop};
+use crate::{AutoWC, EventLoop};
 use smithay::reexports::calloop::{self, channel::Event};
 
 pub fn init_stdin(
@@ -19,8 +19,7 @@ pub fn init_stdin(
 
             match protocol.parse_control_command(&msg) {
                 Ok(Some(command)) => {
-                    let responds_with_screenshot =
-                        matches!(command, ControlCommand::Screenshot { .. });
+                    let responds_with_screenshot = command.responds_with_screenshot();
                     if let Err(err) = state.process_control_command(command) {
                         protocol.send_error(err);
                     } else if !responds_with_screenshot {
