@@ -94,7 +94,7 @@ impl AutoWC {
 
         // Here we initialize implementations of some wayland protocols
         // Some of them require us to implement traits on the AutoWC state,
-        // you can find those implementations in the `crate::handlers` module
+        // you can find those implementations in the `crate::wayland` module
 
         // Initialize protocols needed for displaying windows
         let compositor_state = CompositorState::new::<Self>(&dh);

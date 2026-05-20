@@ -1,7 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
 mod control;
-mod handlers;
 mod host_winit;
 mod input;
 mod keycodes;
@@ -9,6 +8,7 @@ mod protocol;
 mod screenshot;
 mod state;
 mod stdin;
+mod wayland;
 mod window;
 mod winit;
 
