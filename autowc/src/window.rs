@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use smithay::{
     desktop::{Space, Window},
     output::Output,
@@ -23,7 +25,7 @@ impl AutoWindowId {
 #[derive(Debug, Default)]
 pub struct WindowRegistry {
     next_id: u64,
-    windows: Vec<AutoWindow>,
+    windows: HashMap<AutoWindowId, AutoWindow>,
 }
 
 impl WindowRegistry {
@@ -34,45 +36,45 @@ impl WindowRegistry {
     pub fn create_window(&mut self) -> AutoWindowId {
         self.next_id += 1;
         let id = AutoWindowId(self.next_id);
-        self.windows.push(AutoWindow::new(id));
+        self.windows.insert(id, AutoWindow::new(id));
         id
     }
 
     pub fn get(&self, id: AutoWindowId) -> Option<&AutoWindow> {
-        self.windows.iter().find(|window| window.id == id)
+        self.windows.get(&id)
     }
 
     pub fn get_mut(&mut self, id: AutoWindowId) -> Option<&mut AutoWindow> {
-        self.windows.iter_mut().find(|window| window.id == id)
+        self.windows.get_mut(&id)
     }
 
     pub fn find_id_by_surface(&self, surface: &WlSurface) -> Option<AutoWindowId> {
         self.windows
-            .iter()
+            .values()
             .find(|window| window.contains_surface(surface))
             .map(AutoWindow::id)
     }
 
     pub fn find_id_by_host_window(&self, host_window_id: HostWindowId) -> Option<AutoWindowId> {
         self.windows
-            .iter()
+            .values()
             .find(|window| window.host_window_id() == Some(host_window_id))
             .map(AutoWindow::id)
     }
 
     pub fn find_window_by_surface(&self, surface: &WlSurface) -> Option<Window> {
         self.windows
-            .iter()
+            .values()
             .find_map(|window| window.window_by_surface(surface))
     }
 
     pub fn is_empty(&self) -> bool {
-        self.windows.iter().all(AutoWindow::is_empty)
+        self.windows.values().all(AutoWindow::is_empty)
     }
 
     pub fn mapped_windows(&self) -> Vec<Window> {
         self.windows
-            .iter()
+            .values()
             .flat_map(AutoWindow::mapped_windows)
             .collect()
     }
