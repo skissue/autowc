@@ -51,7 +51,6 @@ pub fn init_winit(
             subpixel: Subpixel::Unknown,
             make: "Smithay".into(),
             model: "Winit".into(),
-            serial_number: "Unknown".into(),
         },
     );
     let _global = output.create_global::<AutoWC>(&state.display_handle);

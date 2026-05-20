@@ -7,14 +7,15 @@ use crate::AutoWC;
 // Wl Seat
 //
 
-use smithay::input::dnd::{DndGrabHandler, GrabType, Source};
 use smithay::input::{Seat, SeatHandler, SeatState};
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::protocol::{
+    wl_data_source::WlDataSource, wl_surface::WlSurface,
+};
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::Serial;
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::selection::data_device::{
-    set_data_device_focus, DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler,
+    set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
+    ServerDndGrabHandler,
 };
 use smithay::wayland::selection::SelectionHandler;
 use smithay::{delegate_data_device, delegate_output, delegate_seat};
@@ -53,24 +54,24 @@ impl SelectionHandler for AutoWC {
 }
 
 impl DataDeviceHandler for AutoWC {
-    fn data_device_state(&mut self) -> &mut DataDeviceState {
-        &mut self.data_device_state
+    fn data_device_state(&self) -> &DataDeviceState {
+        &self.data_device_state
     }
 }
 
-impl DndGrabHandler for AutoWC {}
-impl WaylandDndGrabHandler for AutoWC {
-    fn dnd_requested<S: Source>(
+impl ClientDndGrabHandler for AutoWC {
+    fn started(
         &mut self,
-        source: S,
+        source: Option<WlDataSource>,
         _icon: Option<WlSurface>,
         _seat: Seat<Self>,
-        _serial: Serial,
-        _type_: GrabType,
     ) {
-        source.cancel();
+        if let Some(source) = source {
+            source.cancelled();
+        }
     }
 }
+impl ServerDndGrabHandler for AutoWC {}
 
 delegate_data_device!(AutoWC);
 
