@@ -92,22 +92,28 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
         return Ok(None);
     }
 
+    let (window, line) = parse_plain_window_prefix(line)?;
+
     if line == "quit" {
-        return Ok(Some(ControlCommand::new(ControlCommandVariant::Quit)));
+        return Ok(Some(ControlCommand::targeted(
+            window,
+            ControlCommandVariant::Quit,
+        )?));
     }
 
     if let Some(text) = line.strip_prefix("text") {
         let text = text
             .strip_prefix(char::is_whitespace)
             .ok_or_else(|| "usage: text <text>".to_string())?;
-        return Ok(Some(ControlCommand::new(ControlCommandVariant::Text(
-            text.to_string(),
-        ))));
+        return Ok(Some(ControlCommand::targeted(
+            window,
+            ControlCommandVariant::Text(text.to_string()),
+        )?));
     }
 
     let mut parts = line.split_whitespace();
     let command = parts.next().unwrap();
-    match command {
+    let command = match command {
         "key" => parse_key(parts),
         "chord" => parse_chord(parts),
         "mouse" => parse_mouse(parts),
@@ -116,7 +122,11 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
         "screenshot" => parse_screenshot(parts),
         "sleep" => parse_sleep(parts),
         _ => Err(format!("unknown command: {command}")),
-    }
+    }?;
+
+    Ok(command
+        .map(|command| ControlCommand::targeted(window, command.variant))
+        .transpose()?)
 }
 
 pub fn parse_json_control_line(line: &str) -> Result<Option<ControlCommand>, String> {
@@ -153,6 +163,19 @@ pub fn text_to_key_events(text: &str) -> Result<Vec<(u32, PressAction)>, String>
     }
 
     Ok(events)
+}
+
+fn parse_plain_window_prefix(line: &str) -> Result<(Option<u64>, &str), String> {
+    let Some((first, rest)) = line.split_once(char::is_whitespace) else {
+        return Ok((None, line));
+    };
+    let Ok(window) = first.parse::<u64>() else {
+        return Ok((None, line));
+    };
+    if window == 0 {
+        return Err("window id must be greater than zero".into());
+    }
+    Ok((Some(window), rest.trim_start()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -529,6 +552,13 @@ mod tests {
         Some(ControlCommand::new(variant))
     }
 
+    fn targeted_command(window: u64, variant: ControlCommandVariant) -> Option<ControlCommand> {
+        Some(ControlCommand {
+            window: Some(window),
+            variant,
+        })
+    }
+
     #[test]
     fn parses_key_command() {
         assert_eq!(
@@ -651,6 +681,26 @@ mod tests {
             parse_control_command("text hello world").unwrap(),
             command(ControlCommandVariant::Text("hello world".to_string()))
         );
+    }
+
+    #[test]
+    fn parses_plain_window_prefix() {
+        assert_eq!(
+            parse_control_command("2 text second window").unwrap(),
+            targeted_command(2, ControlCommandVariant::Text("second window".to_string()))
+        );
+        assert_eq!(
+            parse_control_command("3 key KeyA").unwrap(),
+            targeted_command(
+                3,
+                ControlCommandVariant::Key {
+                    code: key_to_code("KeyA").unwrap(),
+                    action: PressAction::Press,
+                }
+            )
+        );
+        assert!(parse_control_command("0 text bad").is_err());
+        assert!(parse_control_command("2").is_err());
     }
 
     #[test]
