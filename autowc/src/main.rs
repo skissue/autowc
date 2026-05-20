@@ -5,6 +5,7 @@ mod host;
 mod input;
 mod keycodes;
 mod protocol;
+mod render;
 mod screenshot;
 mod state;
 mod stdin;
