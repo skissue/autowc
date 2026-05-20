@@ -1,10 +1,10 @@
 use smithay::{
-    desktop::Window,
+    desktop::{Space, Window},
     output::Output,
     reexports::{
         wayland_server::protocol::wl_surface::WlSurface, winit::window::WindowId as HostWindowId,
     },
-    utils::{Logical, Physical, Point, Size},
+    utils::{Logical, Physical, Size},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -24,8 +24,7 @@ impl WindowRegistry {
     pub fn create_window(&mut self) -> AutoWindowId {
         self.next_id += 1;
         let id = AutoWindowId(self.next_id);
-        let index = self.windows.len() as i32;
-        self.windows.push(AutoWindow::new(id, index));
+        self.windows.push(AutoWindow::new(id));
         id
     }
 
@@ -51,6 +50,12 @@ impl WindowRegistry {
             .map(AutoWindow::id)
     }
 
+    pub fn find_window_by_surface(&self, surface: &WlSurface) -> Option<Window> {
+        self.windows
+            .iter()
+            .find_map(|window| window.window_by_surface(surface))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.windows.iter().all(AutoWindow::is_empty)
     }
@@ -66,9 +71,9 @@ impl WindowRegistry {
 #[derive(Debug)]
 pub struct AutoWindow {
     id: AutoWindowId,
+    space: Space<Window>,
     host_window_id: Option<HostWindowId>,
     output: Option<Output>,
-    output_loc: Point<i32, Logical>,
     host_size: Option<Size<i32, Physical>>,
     virtual_size: Option<Size<i32, Logical>>,
     state: AutoWindowState,
@@ -77,12 +82,12 @@ pub struct AutoWindow {
 }
 
 impl AutoWindow {
-    fn new(id: AutoWindowId, index: i32) -> Self {
+    fn new(id: AutoWindowId) -> Self {
         Self {
             id,
+            space: Space::default(),
             host_window_id: None,
             output: None,
-            output_loc: (index * 100_000, 0).into(),
             host_size: None,
             virtual_size: None,
             state: AutoWindowState::Empty,
@@ -99,16 +104,20 @@ impl AutoWindow {
         self.primary_window.as_ref()
     }
 
+    pub fn space(&self) -> &Space<Window> {
+        &self.space
+    }
+
+    pub fn space_mut(&mut self) -> &mut Space<Window> {
+        &mut self.space
+    }
+
     pub fn host_window_id(&self) -> Option<HostWindowId> {
         self.host_window_id
     }
 
     pub fn output(&self) -> Option<&Output> {
         self.output.as_ref()
-    }
-
-    pub fn output_loc(&self) -> Point<i32, Logical> {
-        self.output_loc
     }
 
     pub fn virtual_size(&self) -> Option<Size<i32, Logical>> {
@@ -208,13 +217,20 @@ impl AutoWindow {
     }
 
     fn contains_surface(&self, surface: &WlSurface) -> bool {
+        self.window_by_surface(surface).is_some()
+    }
+
+    fn window_by_surface(&self, surface: &WlSurface) -> Option<Window> {
         self.primary_window
             .as_ref()
-            .is_some_and(|window| window.toplevel().unwrap().wl_surface() == surface)
-            || self
-                .overlay_windows
-                .iter()
-                .any(|window| window.toplevel().unwrap().wl_surface() == surface)
+            .filter(|window| window.toplevel().unwrap().wl_surface() == surface)
+            .cloned()
+            .or_else(|| {
+                self.overlay_windows
+                    .iter()
+                    .find(|window| window.toplevel().unwrap().wl_surface() == surface)
+                    .cloned()
+            })
     }
 }
 

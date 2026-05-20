@@ -230,8 +230,7 @@ impl AutoWC {
     ) {
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.seat.get_pointer().unwrap();
-        let pos = self.window_local_to_space(window_id, pos);
-        let under = self.surface_under(pos);
+        let under = self.surface_under(window_id, pos);
 
         pointer.motion(
             self,
@@ -304,8 +303,7 @@ impl AutoWC {
 
                 let (pos, under) = if let Some(pos) = self.host_to_virtual(window_id, host_pos) {
                     self.pointer_in_viewport = true;
-                    let pos = self.window_local_to_space(window_id, pos);
-                    (pos, self.surface_under(pos))
+                    (pos, self.surface_under(window_id, pos))
                 } else {
                     self.pointer_in_viewport = false;
                     (pointer.current_location(), None)
@@ -336,10 +334,7 @@ impl AutoWC {
                 let button_state = event.state();
 
                 if button_state == ButtonState::Pressed && !pointer.is_grabbed() {
-                    let focus = self
-                        .space
-                        .element_under(pointer.current_location())
-                        .map(|(window, _)| window.clone());
+                    let focus = self.element_under(window_id, pointer.current_location());
                     self.focus_window(window_id, focus.as_ref());
                 }
 

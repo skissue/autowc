@@ -44,7 +44,6 @@ pub struct AutoWC {
     pub socket_name: OsString,
     pub display_handle: DisplayHandle,
 
-    pub space: Space<Window>,
     pub loop_signal: LoopSignal,
     pub virtual_size: Size<i32, Logical>,
     pub dynamic_resize: bool,
@@ -121,12 +120,6 @@ impl AutoWC {
         // Here we assume that there is always pointer plugged in
         seat.add_pointer();
 
-        // A space represents a two-dimensional plane. Windows and Outputs can be mapped onto it.
-        //
-        // Windows get a position and stacking order through mapping.
-        // Outputs become views of a part of the Space and can be rendered via Space::render_output.
-        let space = Space::default();
-
         // Setup a wayland socket that will be used to accept clients
         let socket_name = Self::init_wayland_listener(display, event_loop);
 
@@ -140,7 +133,6 @@ impl AutoWC {
             start_time,
             display_handle: dh,
 
-            space,
             loop_signal,
             socket_name,
             virtual_size,
@@ -220,9 +212,12 @@ impl AutoWC {
 
     pub fn surface_under(
         &self,
+        window_id: AutoWindowId,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space
+        self.windows
+            .get(window_id)?
+            .space()
             .element_under(pos)
             .and_then(|(window, location)| {
                 window
@@ -231,12 +226,53 @@ impl AutoWC {
             })
     }
 
-    pub fn window_local_to_space(
+    pub fn element_under(
         &self,
         window_id: AutoWindowId,
         pos: Point<f64, Logical>,
-    ) -> Point<f64, Logical> {
-        pos + self.window_output_loc(window_id).to_f64()
+    ) -> Option<Window> {
+        self.windows
+            .get(window_id)?
+            .space()
+            .element_under(pos)
+            .map(|(window, _)| window.clone())
+    }
+
+    pub fn window_space(&self, window_id: AutoWindowId) -> Option<&Space<Window>> {
+        self.windows.get(window_id).map(|window| window.space())
+    }
+
+    pub fn map_output_for_window(&mut self, window_id: AutoWindowId, output: &Output) {
+        self.windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .space_mut()
+            .map_output(output, (0, 0));
+    }
+
+    pub fn output_geometry_for_window(
+        &self,
+        window_id: AutoWindowId,
+        output: &Output,
+    ) -> Option<Rectangle<i32, Logical>> {
+        self.windows.get(window_id)?.space().output_geometry(output)
+    }
+
+    pub fn element_geometry_for_window(
+        &self,
+        window_id: AutoWindowId,
+        window: &Window,
+    ) -> Option<Rectangle<i32, Logical>> {
+        self.windows
+            .get(window_id)?
+            .space()
+            .element_geometry(window)
+    }
+
+    pub fn refresh_window_space(&mut self, window_id: AutoWindowId) {
+        if let Some(window) = self.windows.get_mut(window_id) {
+            window.space_mut().refresh();
+        }
     }
 
     pub fn set_host_window_requester(&mut self, requester: HostWindowRequester) {
@@ -476,7 +512,11 @@ impl AutoWC {
                 .expect("AutoWC window is missing")
                 .take_primary_window()
             {
-                self.space.unmap_elem(&window);
+                self.windows
+                    .get_mut(window_id)
+                    .expect("AutoWC window is missing")
+                    .space_mut()
+                    .unmap_elem(&window);
             }
             if let Some(host_window_id) = self
                 .windows
@@ -498,7 +538,11 @@ impl AutoWC {
             .expect("AutoWC window is missing")
             .remove_overlay_by_surface(surface)
         {
-            self.space.unmap_elem(&window);
+            self.windows
+                .get_mut(window_id)
+                .expect("AutoWC window is missing")
+                .space_mut()
+                .unmap_elem(&window);
             let next_focus = self
                 .windows
                 .get(window_id)
@@ -559,7 +603,11 @@ impl AutoWC {
         let serial = SERIAL_COUNTER.next_serial();
 
         if let Some(window) = window {
-            self.space.raise_element(window, true);
+            self.windows
+                .get_mut(window_id)
+                .expect("AutoWC window is missing")
+                .space_mut()
+                .raise_element(window, true);
         }
 
         for window in self.mapped_windows() {
@@ -641,14 +689,11 @@ impl AutoWC {
 
         let virtual_size = self.window_virtual_size(window_id);
         self.configure_toplevel(&window, virtual_size);
-        self.space.map_element(
-            window.clone(),
-            self.windows
-                .get(window_id)
-                .expect("AutoWC window is missing")
-                .output_loc(),
-            false,
-        );
+        self.windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .space_mut()
+            .map_element(window.clone(), (0, 0), false);
         self.focus_window(window_id, Some(&window));
 
         let overlays = self.overlay_windows(window_id);
@@ -701,13 +746,6 @@ impl AutoWC {
             .unwrap_or(self.host_size)
     }
 
-    pub fn window_output_loc(&self, window_id: AutoWindowId) -> Point<i32, Logical> {
-        self.windows
-            .get(window_id)
-            .map(|window| window.output_loc())
-            .unwrap_or((0, 0).into())
-    }
-
     pub fn find_window_by_host_window(&self, host_window_id: HostWindowId) -> Option<AutoWindowId> {
         self.windows.find_id_by_host_window(host_window_id)
     }
@@ -734,8 +772,11 @@ impl AutoWC {
         else {
             return;
         };
-        let output_loc = self.window_output_loc(window_id);
-        self.space.map_element(window.clone(), output_loc, false);
+        self.windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .space_mut()
+            .map_element(window.clone(), (0, 0), false);
         self.windows
             .get_mut(window_id)
             .expect("AutoWC window is missing")
@@ -759,13 +800,15 @@ impl AutoWC {
         }
 
         let virtual_size = self.window_virtual_size(window_id);
-        let output_loc = self.window_output_loc(window_id);
         // TODO: Replace this with a real overlay policy. This should eventually
         // consider xdg parent/transient relationships and clamp to the output.
         let x = ((virtual_size.w - geometry.size.w) / 2).max(0);
         let y = ((virtual_size.h - geometry.size.h) / 2).max(0);
-        self.space
-            .map_element(window.clone(), (output_loc.x + x, output_loc.y + y), false);
+        self.windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .space_mut()
+            .map_element(window.clone(), (x, y), false);
     }
 }
 

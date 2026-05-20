@@ -90,9 +90,7 @@ pub fn init_winit(
                     host.output_mode_size(state.dynamic_resize, virtual_size),
                     host.output_scale(state.dynamic_resize),
                 );
-                state
-                    .space
-                    .map_output(&output, state.window_output_loc(auto_window_id));
+                state.map_output_for_window(auto_window_id, &output);
                 state.bind_host_window(
                     auto_window_id,
                     window_id,
@@ -261,13 +259,12 @@ fn render_host_window(
             });
         }
 
-        let render_elements = space_render_elements::<_, Window, _>(
-            renderer,
-            [&state.space],
-            &render_window.output,
-            1.0,
-        )
-        .unwrap();
+        let Some(space) = state.window_space(auto_window_id) else {
+            return;
+        };
+        let render_elements =
+            space_render_elements::<_, Window, _>(renderer, [space], &render_window.output, 1.0)
+                .unwrap();
 
         let virtual_framebuffer = render_window.virtual_framebuffer.as_mut().unwrap();
         {
@@ -347,7 +344,7 @@ fn render_host_window(
         }
     }
 
-    state.space.refresh();
+    state.refresh_window_space(auto_window_id);
     state.popups.cleanup();
     let _ = state.display_handle.flush_clients();
 

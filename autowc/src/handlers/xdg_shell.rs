@@ -59,11 +59,7 @@ delegate_xdg_shell!(AutoWC);
 /// Should be called on `WlSurface::commit`
 pub fn handle_commit(state: &mut AutoWC, surface: &WlSurface) {
     // Handle toplevel commits.
-    let window = state
-        .space
-        .elements()
-        .find(|w| w.toplevel().unwrap().wl_surface() == surface)
-        .cloned();
+    let window = state.windows.find_window_by_surface(surface);
 
     if let Some(window) = window {
         let initial_configure_sent = with_states(surface, |states| {
@@ -106,24 +102,19 @@ impl AutoWC {
         let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) else {
             return;
         };
-        let Some(window) = self
-            .space
-            .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &root)
-        else {
+        let Some(window_id) = self.windows.find_id_by_surface(&root) else {
             return;
         };
-
-        let Some(window_id) = self.windows.find_id_by_surface(&root) else {
+        let Some(window) = self.windows.find_window_by_surface(&root) else {
             return;
         };
         let Some(output) = self.output_for_window(window_id) else {
             return;
         };
-        let Some(output_geo) = self.space.output_geometry(&output) else {
+        let Some(output_geo) = self.output_geometry_for_window(window_id, &output) else {
             return;
         };
-        let Some(window_geo) = self.space.element_geometry(window) else {
+        let Some(window_geo) = self.element_geometry_for_window(window_id, &window) else {
             return;
         };
 
