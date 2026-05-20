@@ -9,6 +9,7 @@ mod protocol;
 mod screenshot;
 mod state;
 mod stdin;
+mod window;
 mod winit;
 
 use std::{

@@ -14,7 +14,8 @@ use smithay::{
 
 use crate::{
     control::{text_to_key_events, ControlCommand},
-    state::{AutoWC, QueuedControlAction},
+    state::{AutoWC, QueuedControlAction, QueuedControlActionKind},
+    window::AutoWindowId,
 };
 
 pub const CONTROL_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -33,101 +34,128 @@ pub const DEFAULT_COMMAND_INTERVAL: Duration = Duration::from_millis(DEFAULT_COM
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
+        let window_id = self.default_window_id;
         match command {
             ControlCommand::Key { code, action } => {
                 for state in action.key_states() {
-                    self.control_queue.push_back(QueuedControlAction::Key {
-                        code,
-                        state: *state,
-                    });
-                    self.control_queue
-                        .push_back(QueuedControlAction::Delay(self.key_event_interval));
+                    self.queue_control_action(
+                        window_id,
+                        QueuedControlActionKind::Key {
+                            code,
+                            state: *state,
+                        },
+                    );
+                    self.queue_control_action(
+                        window_id,
+                        QueuedControlActionKind::Delay(self.key_event_interval),
+                    );
                 }
             }
             ControlCommand::Chord { codes } => {
                 let mut pressed_codes = codes.iter().peekable();
                 while let Some(code) = pressed_codes.next() {
-                    self.control_queue.push_back(QueuedControlAction::Key {
-                        code: *code,
-                        state: KeyState::Pressed,
-                    });
+                    self.queue_control_action(
+                        window_id,
+                        QueuedControlActionKind::Key {
+                            code: *code,
+                            state: KeyState::Pressed,
+                        },
+                    );
                     if pressed_codes.peek().is_some() {
-                        self.control_queue
-                            .push_back(QueuedControlAction::Delay(self.chord_key_interval));
+                        self.queue_control_action(
+                            window_id,
+                            QueuedControlActionKind::Delay(self.chord_key_interval),
+                        );
                     }
                 }
-                self.control_queue
-                    .push_back(QueuedControlAction::Delay(self.chord_hold_duration));
+                self.queue_control_action(
+                    window_id,
+                    QueuedControlActionKind::Delay(self.chord_hold_duration),
+                );
                 for code in codes.iter().rev() {
-                    self.control_queue.push_back(QueuedControlAction::Key {
-                        code: *code,
-                        state: KeyState::Released,
-                    });
+                    self.queue_control_action(
+                        window_id,
+                        QueuedControlActionKind::Key {
+                            code: *code,
+                            state: KeyState::Released,
+                        },
+                    );
                 }
-                self.control_queue
-                    .push_back(QueuedControlAction::Delay(self.key_event_interval));
+                self.queue_control_action(
+                    window_id,
+                    QueuedControlActionKind::Delay(self.key_event_interval),
+                );
             }
             ControlCommand::Text(text) => {
                 for (code, action) in text_to_key_events(&text)? {
                     for state in action.key_states() {
-                        self.control_queue.push_back(QueuedControlAction::Key {
-                            code,
-                            state: *state,
-                        });
-                        self.control_queue
-                            .push_back(QueuedControlAction::Delay(self.key_event_interval));
+                        self.queue_control_action(
+                            window_id,
+                            QueuedControlActionKind::Key {
+                                code,
+                                state: *state,
+                            },
+                        );
+                        self.queue_control_action(
+                            window_id,
+                            QueuedControlActionKind::Delay(self.key_event_interval),
+                        );
                     }
                 }
             }
             ControlCommand::PointerMove { x, y } => {
-                self.control_queue
-                    .push_back(QueuedControlAction::PointerMove { x, y });
+                self.queue_control_action(window_id, QueuedControlActionKind::PointerMove { x, y });
             }
             ControlCommand::PointerButton { button, action } => {
                 for state in action.button_states() {
-                    self.control_queue
-                        .push_back(QueuedControlAction::PointerButton {
+                    self.queue_control_action(
+                        window_id,
+                        QueuedControlActionKind::PointerButton {
                             button,
                             state: *state,
-                        });
+                        },
+                    );
                 }
             }
             ControlCommand::Click { x, y, button } => {
-                self.control_queue
-                    .push_back(QueuedControlAction::PointerMove { x, y });
-                self.control_queue
-                    .push_back(QueuedControlAction::PointerButton {
+                self.queue_control_action(window_id, QueuedControlActionKind::PointerMove { x, y });
+                self.queue_control_action(
+                    window_id,
+                    QueuedControlActionKind::PointerButton {
                         button,
                         state: ButtonState::Pressed,
-                    });
-                self.control_queue
-                    .push_back(QueuedControlAction::PointerButton {
+                    },
+                );
+                self.queue_control_action(
+                    window_id,
+                    QueuedControlActionKind::PointerButton {
                         button,
                         state: ButtonState::Released,
-                    });
+                    },
+                );
             }
             ControlCommand::Scroll { dx, dy } => {
-                self.control_queue
-                    .push_back(QueuedControlAction::Scroll { dx, dy });
+                self.queue_control_action(window_id, QueuedControlActionKind::Scroll { dx, dy });
             }
             ControlCommand::Screenshot { path } => {
-                self.control_queue
-                    .push_back(QueuedControlAction::Screenshot { path });
+                self.queue_control_action(window_id, QueuedControlActionKind::Screenshot { path });
             }
             ControlCommand::Sleep { duration_ms } => {
-                self.control_queue
-                    .push_back(QueuedControlAction::Delay(Duration::from_millis(
-                        duration_ms,
-                    )));
+                self.queue_control_action(
+                    window_id,
+                    QueuedControlActionKind::Delay(Duration::from_millis(duration_ms)),
+                );
             }
             ControlCommand::Quit => {
-                self.control_queue.push_back(QueuedControlAction::Quit);
+                self.queue_control_action(window_id, QueuedControlActionKind::Quit);
             }
         }
 
         if !self.command_interval.is_zero() {
-            self.control_queue
-                .push_back(QueuedControlAction::Delay(self.command_interval));
+            self.queue_control_action(
+                window_id,
+                QueuedControlActionKind::Delay(self.command_interval),
+            );
         }
 
         Ok(())
@@ -144,26 +172,26 @@ impl AutoWC {
         self.next_control_action_at = None;
 
         while let Some(action) = self.control_queue.pop_front() {
-            match action {
-                QueuedControlAction::Key { code, state } => {
-                    self.process_virtual_input_event(code, state);
+            match action.kind {
+                QueuedControlActionKind::Key { code, state } => {
+                    self.process_virtual_input_event(action.window_id, code, state);
                 }
-                QueuedControlAction::PointerMove { x, y } => {
-                    self.process_virtual_pointer_motion((x, y).into());
+                QueuedControlActionKind::PointerMove { x, y } => {
+                    self.process_virtual_pointer_motion(action.window_id, (x, y).into());
                 }
-                QueuedControlAction::PointerButton { button, state } => {
+                QueuedControlActionKind::PointerButton { button, state } => {
                     self.process_virtual_pointer_button(button, state);
                 }
-                QueuedControlAction::Scroll { dx, dy } => {
+                QueuedControlActionKind::Scroll { dx, dy } => {
                     self.process_virtual_scroll(dx, dy);
                 }
-                QueuedControlAction::Screenshot { path } => {
-                    self.queue_screenshot(path);
+                QueuedControlActionKind::Screenshot { path } => {
+                    self.queue_screenshot(action.window_id, path);
                 }
-                QueuedControlAction::Quit => {
+                QueuedControlActionKind::Quit => {
                     self.request_shutdown();
                 }
-                QueuedControlAction::Delay(duration) => {
+                QueuedControlActionKind::Delay(duration) => {
                     self.next_control_action_at = Some(Instant::now() + duration);
                     return;
                 }
@@ -171,7 +199,17 @@ impl AutoWC {
         }
     }
 
-    pub fn process_virtual_input_event(&mut self, code: u32, state: KeyState) {
+    fn queue_control_action(&mut self, window_id: AutoWindowId, kind: QueuedControlActionKind) {
+        self.control_queue
+            .push_back(QueuedControlAction { window_id, kind });
+    }
+
+    pub fn process_virtual_input_event(
+        &mut self,
+        _window_id: AutoWindowId,
+        code: u32,
+        state: KeyState,
+    ) {
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.now_msec();
 
@@ -185,10 +223,14 @@ impl AutoWC {
         );
     }
 
-    pub fn process_virtual_pointer_motion(&mut self, pos: Point<f64, smithay::utils::Logical>) {
+    pub fn process_virtual_pointer_motion(
+        &mut self,
+        window_id: AutoWindowId,
+        pos: Point<f64, smithay::utils::Logical>,
+    ) {
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.seat.get_pointer().unwrap();
-        let under = self.surface_under(pos);
+        let under = self.surface_under(window_id, pos);
 
         pointer.motion(
             self,
@@ -232,7 +274,11 @@ impl AutoWC {
         pointer.frame(self);
     }
 
-    pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+    pub fn process_input_event<I: InputBackend>(
+        &mut self,
+        window_id: AutoWindowId,
+        event: InputEvent<I>,
+    ) {
         match event {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
@@ -255,7 +301,7 @@ impl AutoWC {
 
                 let (pos, under) = if let Some(pos) = self.host_to_virtual(host_pos) {
                     self.pointer_in_viewport = true;
-                    (pos, self.surface_under(pos))
+                    (pos, self.surface_under(window_id, pos))
                 } else {
                     self.pointer_in_viewport = false;
                     (pointer.current_location(), None)
@@ -290,7 +336,7 @@ impl AutoWC {
                         .space
                         .element_under(pointer.current_location())
                         .map(|(window, _)| window.clone());
-                    self.focus_window(focus.as_ref());
+                    self.focus_window(window_id, focus.as_ref());
                 }
 
                 pointer.button(

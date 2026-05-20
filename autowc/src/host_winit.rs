@@ -1,4 +1,4 @@
-use std::{io::Error as IoError, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, io::Error as IoError, path::PathBuf, sync::Arc, time::Duration};
 
 use smithay::{
     backend::{
@@ -45,24 +45,43 @@ pub fn init_from_attributes(
 
     event_loop.set_control_flow(smithay::reexports::winit::event_loop::ControlFlow::Poll);
     let scale_factor = window.scale_factor();
+    let startup_window_id = window.id();
     let event_loop = Generic::new(event_loop, Interest::READ, Mode::Level);
+
+    let mut render_windows = HashMap::new();
+    render_windows.insert(
+        startup_window_id,
+        HostRenderWindow {
+            window: window.clone(),
+            egl_surface,
+            bind_size: None,
+        },
+    );
+
+    let mut event_windows = HashMap::new();
+    event_windows.insert(
+        startup_window_id,
+        HostEventWindow {
+            window,
+            is_x11,
+            scale_factor,
+        },
+    );
 
     Ok((
         HostGraphicsBackend {
             renderer,
             _display: display,
-            egl_surface,
-            window: window.clone(),
+            windows: render_windows,
+            startup_window_id,
             damage_tracking,
-            bind_size: None,
         },
         HostEventLoop {
             inner: HostEventLoopInner {
-                window,
+                windows: event_windows,
+                startup_window_id,
                 clock: Clock::<Monotonic>::new(),
                 key_counter: 0,
-                is_x11,
-                scale_factor,
             },
             fake_token: None,
             pending_events: Vec::new(),
@@ -135,24 +154,29 @@ fn create_egl_surface(
 pub struct HostGraphicsBackend {
     renderer: GlesRenderer,
     _display: EGLDisplay,
-    egl_surface: EGLSurface,
-    window: Arc<WinitWindow>,
+    windows: HashMap<WindowId, HostRenderWindow>,
+    startup_window_id: WindowId,
     damage_tracking: bool,
+}
+
+struct HostRenderWindow {
+    window: Arc<WinitWindow>,
+    egl_surface: EGLSurface,
     bind_size: Option<Size<i32, Physical>>,
 }
 
 impl HostGraphicsBackend {
     pub fn window_size(&self) -> Size<i32, Physical> {
-        let (w, h): (i32, i32) = self.window.inner_size().into();
+        let (w, h): (i32, i32) = self.startup_window().inner_size().into();
         (w, h).into()
     }
 
     pub fn scale_factor(&self) -> f64 {
-        self.window.scale_factor()
+        self.startup_window().scale_factor()
     }
 
     pub fn window(&self) -> &WinitWindow {
-        &self.window
+        self.startup_window()
     }
 
     pub fn bind(
@@ -164,24 +188,37 @@ impl HostGraphicsBackend {
         ),
         SwapBuffersError,
     > {
-        let window_size = self.window_size();
-        if Some(window_size) != self.bind_size {
-            self.egl_surface.resize(window_size.w, window_size.h, 0, 0);
+        let window_id = self.startup_window_id;
+        let Self {
+            renderer, windows, ..
+        } = self;
+        let window = windows
+            .get_mut(&window_id)
+            .expect("startup host window is missing");
+        let window_size = window.window_size();
+        if Some(window_size) != window.bind_size {
+            window
+                .egl_surface
+                .resize(window_size.w, window_size.h, 0, 0);
         }
-        self.bind_size = Some(window_size);
+        window.bind_size = Some(window_size);
 
-        let framebuffer = self.renderer.bind(&mut self.egl_surface)?;
+        let framebuffer = renderer.bind(&mut window.egl_surface)?;
 
-        Ok((&mut self.renderer, framebuffer))
+        Ok((renderer, framebuffer))
     }
 
     pub fn submit(
         &mut self,
         damage: Option<&[Rectangle<i32, Physical>]>,
     ) -> Result<(), SwapBuffersError> {
+        let window = self
+            .windows
+            .get_mut(&self.startup_window_id)
+            .expect("startup host window is missing");
         let mut damage = match damage {
             Some(damage) if self.damage_tracking && !damage.is_empty() => {
-                let bind_size = self
+                let bind_size = window
                     .bind_size
                     .expect("submitting without ever binding the renderer");
                 let damage = damage
@@ -198,9 +235,24 @@ impl HostGraphicsBackend {
             _ => None,
         };
 
-        self.window.pre_present_notify();
-        self.egl_surface.swap_buffers(damage.as_deref_mut())?;
+        window.window.pre_present_notify();
+        window.egl_surface.swap_buffers(damage.as_deref_mut())?;
         Ok(())
+    }
+
+    fn startup_window(&self) -> &WinitWindow {
+        &self
+            .windows
+            .get(&self.startup_window_id)
+            .expect("startup host window is missing")
+            .window
+    }
+}
+
+impl HostRenderWindow {
+    fn window_size(&self) -> Size<i32, Physical> {
+        let (w, h): (i32, i32) = self.window.inner_size().into();
+        (w, h).into()
     }
 }
 
@@ -234,9 +286,15 @@ impl HostEventLoop {
 
 #[derive(Debug)]
 struct HostEventLoopInner {
-    window: Arc<WinitWindow>,
+    windows: HashMap<WindowId, HostEventWindow>,
+    startup_window_id: WindowId,
     clock: Clock<Monotonic>,
     key_counter: u32,
+}
+
+#[derive(Debug)]
+struct HostEventWindow {
+    window: Arc<WinitWindow>,
     is_x11: bool,
     scale_factor: f64,
 }
@@ -250,12 +308,20 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
     fn timestamp(&self) -> u64 {
         self.inner.clock.now().as_micros()
     }
+
+    fn window(&self, window_id: WindowId) -> Option<&HostEventWindow> {
+        self.inner.windows.get(&window_id)
+    }
+
+    fn window_mut(&mut self, window_id: WindowId) -> Option<&mut HostEventWindow> {
+        self.inner.windows.get_mut(&window_id)
+    }
 }
 
 impl<F: FnMut(HostEvent)> ApplicationHandler for HostEventLoopApp<'_, F> {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
         (self.callback)(HostEvent::Input {
-            window_id: self.inner.window.id(),
+            window_id: self.inner.startup_window_id,
             event: InputEvent::DeviceAdded {
                 device: HostVirtualDevice,
             },
@@ -270,23 +336,31 @@ impl<F: FnMut(HostEvent)> ApplicationHandler for HostEventLoopApp<'_, F> {
     ) {
         match event {
             WindowEvent::Resized(size) => {
+                let Some(window) = self.window(window_id) else {
+                    return;
+                };
+                let scale_factor = window.scale_factor;
                 let (w, h): (i32, i32) = size.into();
                 (self.callback)(HostEvent::Resized {
                     window_id,
                     size: (w, h).into(),
-                    scale_factor: self.inner.scale_factor,
+                    scale_factor,
                 });
             }
             WindowEvent::ScaleFactorChanged {
                 scale_factor: new_scale_factor,
                 ..
             } => {
-                self.inner.scale_factor = new_scale_factor;
-                let (w, h): (i32, i32) = self.inner.window.inner_size().into();
+                let Some(window) = self.window_mut(window_id) else {
+                    return;
+                };
+                window.scale_factor = new_scale_factor;
+                let scale_factor = window.scale_factor;
+                let (w, h): (i32, i32) = window.window.inner_size().into();
                 (self.callback)(HostEvent::Resized {
                     window_id,
                     size: (w, h).into(),
-                    scale_factor: self.inner.scale_factor,
+                    scale_factor,
                 });
             }
             WindowEvent::RedrawRequested => {
@@ -321,7 +395,10 @@ impl<F: FnMut(HostEvent)> ApplicationHandler for HostEventLoopApp<'_, F> {
                 (self.callback)(HostEvent::Input { window_id, event });
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let size = self.inner.window.inner_size();
+                let Some(window) = self.window(window_id) else {
+                    return;
+                };
+                let size = window.window.inner_size();
                 let x = position.x / size.width as f64;
                 let y = position.y / size.height as f64;
                 let event = InputEvent::PointerMotionAbsolute {
@@ -343,12 +420,15 @@ impl<F: FnMut(HostEvent)> ApplicationHandler for HostEventLoopApp<'_, F> {
                 (self.callback)(HostEvent::Input { window_id, event });
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                let Some(window) = self.window(window_id) else {
+                    return;
+                };
                 let event = InputEvent::PointerButton {
                     event: HostMouseInputEvent {
                         time: self.timestamp(),
                         button,
                         state: button_state(state),
-                        is_x11: self.inner.is_x11,
+                        is_x11: window.is_x11,
                     },
                 };
                 (self.callback)(HostEvent::Input { window_id, event });

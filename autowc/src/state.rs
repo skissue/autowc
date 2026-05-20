@@ -31,7 +31,10 @@ use smithay::{
     },
 };
 
-use crate::protocol::Protocol;
+use crate::{
+    protocol::Protocol,
+    window::{AutoWindowId, WindowRegistry},
+};
 
 pub struct AutoWC {
     pub start_time: std::time::Instant,
@@ -42,8 +45,8 @@ pub struct AutoWC {
     pub loop_signal: LoopSignal,
     pub virtual_size: Size<i32, Logical>,
     pub dynamic_resize: bool,
-    pub primary_window: Option<Window>,
-    pub overlay_windows: Vec<Window>,
+    pub windows: WindowRegistry,
+    pub default_window_id: AutoWindowId,
     pub host_size: Size<i32, Physical>,
     pub pointer_in_viewport: bool,
     pub child: Option<Child>,
@@ -125,6 +128,9 @@ impl AutoWC {
         // Get the loop signal, used to stop the event loop
         let loop_signal = event_loop.get_signal();
 
+        let mut windows = WindowRegistry::new();
+        let default_window_id = windows.create_window();
+
         Self {
             start_time,
             display_handle: dh,
@@ -134,8 +140,8 @@ impl AutoWC {
             socket_name,
             virtual_size,
             dynamic_resize,
-            primary_window: None,
-            overlay_windows: Vec::new(),
+            windows,
+            default_window_id,
             host_size: virtual_size.to_physical(1),
             pointer_in_viewport: false,
             child: None,
@@ -206,6 +212,7 @@ impl AutoWC {
 
     pub fn surface_under(
         &self,
+        _window_id: AutoWindowId,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
         self.space
@@ -229,7 +236,11 @@ impl AutoWC {
         self.virtual_size = size;
         self.clear_command_queue();
 
-        if let Some(primary_window) = self.primary_window.as_ref() {
+        if let Some(primary_window) = self
+            .windows
+            .get(self.default_window_id)
+            .and_then(|window| window.primary_window())
+        {
             self.configure_primary(primary_window);
             let toplevel = primary_window.toplevel().unwrap();
             if toplevel.is_initial_configure_sent() {
@@ -237,7 +248,7 @@ impl AutoWC {
             }
         }
 
-        let overlays = self.overlay_windows.clone();
+        let overlays = self.overlay_windows(self.default_window_id);
         for overlay in overlays {
             self.center_overlay(&overlay);
         }
@@ -284,47 +295,67 @@ impl AutoWC {
     }
 
     pub fn map_new_toplevel(&mut self, window: Window) {
-        if self.primary_window.is_none() {
+        let window_id = self.default_window_id;
+        if !self
+            .windows
+            .get(window_id)
+            .expect("default AutoWC window is missing")
+            .has_primary_window()
+        {
             self.configure_primary(&window);
             self.space.map_element(window.clone(), (0, 0), false);
-            self.primary_window = Some(window.clone());
-            self.focus_window(Some(&window));
+            self.windows
+                .get_mut(window_id)
+                .expect("default AutoWC window is missing")
+                .set_primary_window(window.clone());
+            self.focus_window(window_id, Some(&window));
             return;
         }
 
         self.configure_overlay(&window);
         self.space.map_element(window.clone(), (0, 0), false);
-        self.overlay_windows.push(window.clone());
-        self.focus_window(Some(&window));
+        self.windows
+            .get_mut(window_id)
+            .expect("default AutoWC window is missing")
+            .push_overlay_window(window.clone());
+        self.focus_window(window_id, Some(&window));
     }
 
     pub fn remove_toplevel(&mut self, surface: &WlSurface) {
-        if self
-            .primary_window
-            .as_ref()
-            .is_some_and(|window| window.toplevel().unwrap().wl_surface() == surface)
-        {
-            if let Some(window) = self.primary_window.take() {
+        let window_id = self.default_window_id;
+        let primary_matches = self
+            .windows
+            .get(window_id)
+            .and_then(|window| window.primary_window())
+            .is_some_and(|window| window.toplevel().unwrap().wl_surface() == surface);
+
+        if primary_matches {
+            if let Some(window) = self
+                .windows
+                .get_mut(window_id)
+                .expect("default AutoWC window is missing")
+                .take_primary_window()
+            {
                 self.space.unmap_elem(&window);
             }
-            self.promote_overlay();
+            self.promote_overlay(window_id);
             self.maybe_exit_when_empty();
             return;
         }
 
-        if let Some(index) = self
-            .overlay_windows
-            .iter()
-            .position(|window| window.toplevel().unwrap().wl_surface() == surface)
+        if let Some(window) = self
+            .windows
+            .get_mut(window_id)
+            .expect("default AutoWC window is missing")
+            .remove_overlay_by_surface(surface)
         {
-            let window = self.overlay_windows.remove(index);
             self.space.unmap_elem(&window);
             let next_focus = self
-                .overlay_windows
-                .last()
-                .cloned()
-                .or_else(|| self.primary_window.clone());
-            self.focus_window(next_focus.as_ref());
+                .windows
+                .get(window_id)
+                .expect("default AutoWC window is missing")
+                .next_focus_window();
+            self.focus_window(window_id, next_focus.as_ref());
         }
 
         self.maybe_exit_when_empty();
@@ -352,9 +383,9 @@ impl AutoWC {
 
     pub fn handle_toplevel_commit(&mut self, surface: &WlSurface) {
         if let Some(window) = self
-            .overlay_windows
-            .iter()
-            .find(|window| window.toplevel().unwrap().wl_surface() == surface)
+            .windows
+            .get(self.default_window_id)
+            .and_then(|auto_window| auto_window.find_overlay_by_surface(surface))
             .cloned()
         {
             self.center_overlay(&window);
@@ -385,7 +416,7 @@ impl AutoWC {
         });
     }
 
-    pub fn focus_window(&mut self, window: Option<&Window>) {
+    pub fn focus_window(&mut self, window_id: AutoWindowId, window: Option<&Window>) {
         let surface = window.map(|window| window.toplevel().unwrap().wl_surface().clone());
         let serial = SERIAL_COUNTER.next_serial();
 
@@ -393,7 +424,7 @@ impl AutoWC {
             self.space.raise_element(window, true);
         }
 
-        for window in self.mapped_windows() {
+        for window in self.mapped_windows(window_id) {
             let toplevel = window.toplevel().unwrap();
             let activated = surface
                 .as_ref()
@@ -407,7 +438,7 @@ impl AutoWC {
         keyboard.set_focus(self, surface, serial);
     }
 
-    pub fn queue_screenshot(&mut self, path: Option<PathBuf>) {
+    pub fn queue_screenshot(&mut self, window_id: AutoWindowId, path: Option<PathBuf>) {
         let path = match path {
             Some(path) => path,
             None => {
@@ -417,7 +448,7 @@ impl AutoWC {
             }
         };
         self.pending_screenshots
-            .push_back(ScreenshotRequest { path });
+            .push_back(ScreenshotRequest { window_id, path });
     }
 
     pub fn request_shutdown(&mut self) {
@@ -444,33 +475,43 @@ impl AutoWC {
         }
     }
 
-    fn promote_overlay(&mut self) {
-        let Some(window) = self.overlay_windows.pop() else {
-            self.focus_window(None);
+    fn promote_overlay(&mut self, window_id: AutoWindowId) {
+        let Some(window) = self
+            .windows
+            .get_mut(window_id)
+            .expect("default AutoWC window is missing")
+            .promote_last_overlay()
+        else {
+            self.focus_window(window_id, None);
             return;
         };
 
         self.configure_primary(&window);
         self.space.map_element(window.clone(), (0, 0), false);
-        self.primary_window = Some(window.clone());
-        self.focus_window(Some(&window));
+        self.focus_window(window_id, Some(&window));
 
-        let overlays = self.overlay_windows.clone();
+        let overlays = self.overlay_windows(window_id);
         for overlay in overlays {
             self.center_overlay(&overlay);
         }
     }
 
-    fn mapped_windows(&self) -> Vec<Window> {
-        self.primary_window
-            .iter()
-            .chain(self.overlay_windows.iter())
-            .cloned()
-            .collect()
+    pub fn mapped_windows(&self, window_id: AutoWindowId) -> Vec<Window> {
+        self.windows
+            .get(window_id)
+            .map(|window| window.mapped_windows())
+            .unwrap_or_default()
+    }
+
+    fn overlay_windows(&self, window_id: AutoWindowId) -> Vec<Window> {
+        self.windows
+            .get(window_id)
+            .map(|window| window.overlay_windows().cloned().collect())
+            .unwrap_or_default()
     }
 
     fn maybe_exit_when_empty(&mut self) {
-        if !self.stay_alive && self.primary_window.is_none() && self.overlay_windows.is_empty() {
+        if !self.stay_alive && self.windows.is_empty() {
             self.request_shutdown();
         }
     }
@@ -529,10 +570,16 @@ pub struct ClientState {
 }
 
 pub struct ScreenshotRequest {
+    pub window_id: AutoWindowId,
     pub path: PathBuf,
 }
 
-pub enum QueuedControlAction {
+pub struct QueuedControlAction {
+    pub window_id: AutoWindowId,
+    pub kind: QueuedControlActionKind,
+}
+
+pub enum QueuedControlActionKind {
     Key { code: u32, state: KeyState },
     PointerMove { x: f64, y: f64 },
     PointerButton { button: u32, state: ButtonState },

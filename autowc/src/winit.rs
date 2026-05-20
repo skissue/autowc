@@ -91,7 +91,7 @@ pub fn init_winit(
                 }
                 HostEvent::Input { window_id, event } => {
                     let _ = window_id;
-                    state.process_input_event(event)
+                    state.process_input_event(state.default_window_id, event)
                 }
                 HostEvent::Redraw { window_id } => {
                     let _ = window_id;
@@ -161,24 +161,28 @@ pub fn init_winit(
                         }
 
                         while let Some(request) = state.pending_screenshots.pop_front() {
-                            let result = renderer
-                                .copy_texture(
-                                    &virtual_framebuffer.texture,
-                                    Rectangle::from_size(virtual_buffer_size),
-                                    Fourcc::Abgr8888,
-                                )
-                                .and_then(|mapping| {
-                                    renderer.map_texture(&mapping).map(|pixels| pixels.to_vec())
-                                })
-                                .map_err(|err| err.to_string())
-                                .and_then(|pixels| {
-                                    screenshot::write_png(
-                                        &request.path,
-                                        &pixels,
-                                        virtual_buffer_size.w as u32,
-                                        virtual_buffer_size.h as u32,
+                            let result = if request.window_id == state.default_window_id {
+                                renderer
+                                    .copy_texture(
+                                        &virtual_framebuffer.texture,
+                                        Rectangle::from_size(virtual_buffer_size),
+                                        Fourcc::Abgr8888,
                                     )
-                                });
+                                    .and_then(|mapping| {
+                                        renderer.map_texture(&mapping).map(|pixels| pixels.to_vec())
+                                    })
+                                    .map_err(|err| err.to_string())
+                                    .and_then(|pixels| {
+                                        screenshot::write_png(
+                                            &request.path,
+                                            &pixels,
+                                            virtual_buffer_size.w as u32,
+                                            virtual_buffer_size.h as u32,
+                                        )
+                                    })
+                            } else {
+                                Err(format!("unknown AutoWC window {:?}", request.window_id))
+                            };
 
                             match result {
                                 Ok(()) => state
