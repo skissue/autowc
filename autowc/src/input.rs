@@ -38,12 +38,18 @@ impl AutoWC {
             Some(window) => {
                 let window_id = AutoWindowId::from_raw(window)
                     .ok_or_else(|| "invalid window id".to_string())?;
-                if self.windows.get(window_id).is_none() {
+                if self
+                    .windows
+                    .get(window_id)
+                    .is_none_or(|window| window.is_empty())
+                {
                     return Err(format!("unknown window: {}", window_id.raw()));
                 }
                 window_id
             }
-            None => self.default_window_id,
+            None => self
+                .first_alive_window_id
+                .ok_or_else(|| "no windows are open".to_string())?,
         };
 
         match command.variant {
@@ -314,13 +320,10 @@ impl AutoWC {
                 let host_pos: Point<f64, Physical> = (event.x(), event.y()).into();
                 let pointer = self.seat.get_pointer().unwrap();
 
-                let (pos, under) = if let Some(pos) = self.host_to_virtual(window_id, host_pos) {
-                    self.pointer_in_viewport = true;
-                    (pos, self.surface_under(window_id, pos))
-                } else {
-                    self.pointer_in_viewport = false;
-                    (pointer.current_location(), None)
-                };
+                let (pos, under) = self
+                    .host_to_virtual(window_id, host_pos)
+                    .map(|pos| (pos, self.surface_under(window_id, pos)))
+                    .unwrap_or_else(|| (pointer.current_location(), None));
 
                 pointer.motion(
                     self,
@@ -334,10 +337,6 @@ impl AutoWC {
                 pointer.frame(self);
             }
             InputEvent::PointerButton { event, .. } => {
-                if !self.pointer_in_viewport {
-                    return;
-                }
-
                 let pointer = self.seat.get_pointer().unwrap();
 
                 let serial = SERIAL_COUNTER.next_serial();
@@ -363,10 +362,6 @@ impl AutoWC {
                 pointer.frame(self);
             }
             InputEvent::PointerAxis { event, .. } => {
-                if !self.pointer_in_viewport {
-                    return;
-                }
-
                 let source = event.source();
 
                 let horizontal_amount = event.amount(Axis::Horizontal).unwrap_or_else(|| {

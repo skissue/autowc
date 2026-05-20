@@ -45,14 +45,12 @@ pub struct AutoWC {
     pub display_handle: DisplayHandle,
 
     pub loop_signal: LoopSignal,
-    pub virtual_size: Size<i32, Logical>,
+    pub initial_virtual_size: Size<i32, Logical>,
     pub dynamic_resize: bool,
     pub windows: WindowRegistry,
-    pub default_window_id: AutoWindowId,
+    pub first_alive_window_id: Option<AutoWindowId>,
     pub focused_window_id: Option<AutoWindowId>,
     pub host_window_requester: Option<HostWindowRequester>,
-    pub host_size: Size<i32, Physical>,
-    pub pointer_in_viewport: bool,
     pub child: Option<Child>,
     pub stay_alive: bool,
     pub pending_screenshots: VecDeque<ScreenshotRequest>,
@@ -82,7 +80,7 @@ impl AutoWC {
     pub fn new(
         event_loop: &mut EventLoop<Self>,
         display: Display<Self>,
-        virtual_size: Size<i32, Logical>,
+        initial_virtual_size: Size<i32, Logical>,
         dynamic_resize: bool,
         stay_alive: bool,
         timing: TimingOptions,
@@ -126,23 +124,18 @@ impl AutoWC {
         // Get the loop signal, used to stop the event loop
         let loop_signal = event_loop.get_signal();
 
-        let mut windows = WindowRegistry::new();
-        let default_window_id = windows.create_window();
-
         Self {
             start_time,
             display_handle: dh,
 
             loop_signal,
             socket_name,
-            virtual_size,
+            initial_virtual_size,
             dynamic_resize,
-            windows,
-            default_window_id,
+            windows: WindowRegistry::new(),
+            first_alive_window_id: None,
             focused_window_id: None,
             host_window_requester: None,
-            host_size: virtual_size.to_physical(1),
-            pointer_in_viewport: false,
             child: None,
             stay_alive,
             pending_screenshots: VecDeque::new(),
@@ -279,36 +272,6 @@ impl AutoWC {
         self.host_window_requester = Some(requester);
     }
 
-    pub fn set_host_size(&mut self, size: Size<i32, Physical>) {
-        self.host_size = size;
-    }
-
-    pub fn resize_virtual_output(&mut self, size: Size<i32, Logical>) {
-        if size.w <= 0 || size.h <= 0 || size == self.virtual_size {
-            return;
-        }
-
-        self.virtual_size = size;
-        self.clear_command_queue();
-
-        if let Some(primary_window) = self
-            .windows
-            .get(self.default_window_id)
-            .and_then(|window| window.primary_window())
-        {
-            self.configure_toplevel(primary_window, size);
-            let toplevel = primary_window.toplevel().unwrap();
-            if toplevel.is_initial_configure_sent() {
-                toplevel.send_pending_configure();
-            }
-        }
-
-        let overlays = self.overlay_windows(self.default_window_id);
-        for overlay in overlays {
-            self.center_overlay(self.default_window_id, &overlay);
-        }
-    }
-
     pub fn clear_command_queue(&mut self) {
         self.control_queue.clear();
         self.next_control_action_at = None;
@@ -356,16 +319,7 @@ impl AutoWC {
     }
 
     pub fn map_new_toplevel(&mut self, window: Window) {
-        let window_id = if !self
-            .windows
-            .get(self.default_window_id)
-            .expect("default AutoWC window is missing")
-            .has_primary_window()
-        {
-            self.default_window_id
-        } else {
-            self.windows.create_window()
-        };
+        let window_id = self.windows.create_window();
 
         self.configure_probe(&window);
         window.toplevel().unwrap().send_configure();
@@ -377,6 +331,7 @@ impl AutoWC {
             .get_mut(window_id)
             .expect("AutoWC window is missing")
             .set_state(AutoWindowState::WaitingProbeCommit);
+        self.note_window_alive(window_id);
     }
 
     pub fn handle_toplevel_commit(&mut self, surface: &WlSurface) {
@@ -528,6 +483,7 @@ impl AutoWC {
                 }
             }
             self.promote_overlay(window_id);
+            self.refresh_first_alive_window();
             self.maybe_exit_when_empty();
             return;
         }
@@ -551,6 +507,7 @@ impl AutoWC {
             self.focus_window(window_id, next_focus.as_ref());
         }
 
+        self.refresh_first_alive_window();
         self.maybe_exit_when_empty();
     }
 
@@ -726,6 +683,19 @@ impl AutoWC {
         }
     }
 
+    fn note_window_alive(&mut self, window_id: AutoWindowId) {
+        self.first_alive_window_id = Some(match self.first_alive_window_id {
+            Some(first_alive_window_id) if first_alive_window_id.raw() < window_id.raw() => {
+                first_alive_window_id
+            }
+            _ => window_id,
+        });
+    }
+
+    fn refresh_first_alive_window(&mut self) {
+        self.first_alive_window_id = self.windows.first_alive_id();
+    }
+
     pub fn output_for_window(&self, window_id: AutoWindowId) -> Option<Output> {
         self.windows
             .get(window_id)
@@ -736,14 +706,14 @@ impl AutoWC {
         self.windows
             .get(window_id)
             .and_then(|window| window.virtual_size())
-            .unwrap_or(self.virtual_size)
+            .unwrap_or(self.initial_virtual_size)
     }
 
-    pub fn window_host_size(&self, window_id: AutoWindowId) -> Size<i32, Physical> {
+    fn window_host_size(&self, window_id: AutoWindowId) -> Size<i32, Physical> {
         self.windows
             .get(window_id)
             .and_then(|window| window.host_size())
-            .unwrap_or(self.host_size)
+            .unwrap_or_else(|| self.initial_virtual_size.to_physical(1))
     }
 
     pub fn find_window_by_host_window(&self, host_window_id: HostWindowId) -> Option<AutoWindowId> {
@@ -789,7 +759,7 @@ impl AutoWC {
         if size.w > 0 && size.h > 0 {
             size
         } else {
-            self.virtual_size
+            self.initial_virtual_size
         }
     }
 

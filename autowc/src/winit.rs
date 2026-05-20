@@ -39,8 +39,8 @@ pub fn init_winit(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let window_attributes = WinitWindow::default_attributes()
         .with_inner_size(LogicalSize::new(
-            state.virtual_size.w as f64,
-            state.virtual_size.h as f64,
+            state.initial_virtual_size.w as f64,
+            state.initial_virtual_size.h as f64,
         ))
         .with_title("AutoWC Bootstrap")
         .with_visible(false);
@@ -72,7 +72,7 @@ pub fn init_winit(
                 let virtual_size = if state.dynamic_resize {
                     host.virtual_size()
                 } else {
-                    state.virtual_size
+                    state.initial_virtual_size
                 };
                 let output = Output::new(
                     format!("winit-{next_output_id}"),
@@ -98,9 +98,6 @@ pub fn init_winit(
                     host.size,
                     virtual_size,
                 );
-                if auto_window_id == state.default_window_id {
-                    state.set_host_size(host.size);
-                }
 
                 host_windows.insert(window_id, auto_window_id);
                 render_windows.insert(
@@ -205,7 +202,7 @@ fn init_probe_output(state: &mut AutoWC) {
         },
     );
     let _global = output.create_global::<AutoWC>(&state.display_handle);
-    update_output_mode(&output, state.virtual_size.to_physical(1), 1.0);
+    update_output_mode(&output, state.initial_virtual_size.to_physical(1), 1.0);
 }
 
 struct RenderWindow {
@@ -399,14 +396,11 @@ fn handle_host_resize(
     let host = HostGeometry::new(size, scale_factor);
     render_window.host_size = host.size;
     render_window.host_scale_factor = host.scale_factor;
-    if auto_window_id == state.default_window_id {
-        state.set_host_size(host.size);
-    }
 
     let virtual_size = if state.dynamic_resize {
         host.virtual_size()
     } else {
-        state.virtual_size
+        state.initial_virtual_size
     };
     state.resize_window_host(auto_window_id, host.size, virtual_size);
     update_output_mode(

@@ -72,6 +72,14 @@ impl WindowRegistry {
         self.windows.values().all(AutoWindow::is_empty)
     }
 
+    pub fn first_alive_id(&self) -> Option<AutoWindowId> {
+        self.windows
+            .values()
+            .filter(|window| !window.is_empty())
+            .map(AutoWindow::id)
+            .min_by_key(|id| id.raw())
+    }
+
     pub fn mapped_windows(&self) -> Vec<Window> {
         self.windows
             .values()
@@ -86,6 +94,7 @@ pub struct AutoWindow {
     space: Space<Window>,
     host_window_id: Option<HostWindowId>,
     output: Option<Output>,
+    // TODO: Add fixed-size presentation and pointer viewport state here when fixed sizing returns.
     host_size: Option<Size<i32, Physical>>,
     virtual_size: Option<Size<i32, Logical>>,
     state: AutoWindowState,
