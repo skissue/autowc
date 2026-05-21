@@ -86,6 +86,9 @@ fn handle_host_event(
             render_windows.resize_host_window(state, window_id, size, scale_factor);
         }
         HostEvent::Input { window_id, event } => {
+            if state.has_pending_control_actions() {
+                return;
+            }
             if let Some(auto_window_id) = render_windows.auto_window_id(window_id) {
                 state.process_input_event(auto_window_id, event);
             }
@@ -97,6 +100,9 @@ fn handle_host_event(
             state.close_host_window(window_id);
         }
         HostEvent::Focus { window_id, focused } => {
+            if state.has_pending_control_actions() {
+                return;
+            }
             let Some(auto_window_id) = render_windows.auto_window_id(window_id) else {
                 return;
             };

@@ -279,6 +279,10 @@ impl AutoWC {
         self.next_control_action_at = None;
     }
 
+    pub fn has_pending_control_actions(&self) -> bool {
+        !self.control_queue.is_empty() || self.next_control_action_at.is_some()
+    }
+
     pub fn presentation_viewport(&self, window_id: AutoWindowId) -> Rectangle<i32, Physical> {
         let host_size = self.window_host_size(window_id);
         if host_size.w <= 0 || host_size.h <= 0 {
