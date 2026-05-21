@@ -3,7 +3,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::{control::ControlCommandVariant, AutoWC, EventLoop};
+use crate::{protocol::ControlResponse, AutoWC, EventLoop};
 use smithay::reexports::calloop::{self, channel::Event};
 use tracing::{debug, trace, warn};
 
@@ -22,29 +22,16 @@ pub fn init_stdin(
             match protocol.parse_control_command(&msg) {
                 Ok(Some(command)) => {
                     debug!(?command, "parsed control command");
-                    if command.variant == ControlCommandVariant::List {
-                        let windows = state.window_infos();
-                        debug!(
-                            window_count = windows.len(),
-                            "responding to window list command"
-                        );
-                        protocol.send_window_list(&windows);
-                        return;
-                    }
-
-                    let responds_with_screenshot = command.responds_with_screenshot();
-                    if let Err(err) = state.process_control_command(command) {
-                        warn!(error = %err, "control command failed");
-                        protocol.send_error(err);
-                    } else if !responds_with_screenshot {
-                        debug!("control command completed");
-                        protocol.send_ok();
-                    }
+                    let response = state.begin_control_response();
+                    state.process_control_command(command, response);
+                    state.flush_control_responses();
                 }
                 Ok(None) => {}
                 Err(err) => {
                     warn!(error = %err, "failed to parse control command");
-                    protocol.send_error(err);
+                    let response = state.begin_control_response();
+                    state.complete_control_response(response, ControlResponse::Error(err));
+                    state.flush_control_responses();
                 }
             }
         })?;

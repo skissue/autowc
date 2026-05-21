@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     ffi::OsString,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -37,7 +37,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     host::HostWindowRequester,
-    protocol::{Protocol, WindowInfo},
+    protocol::{ControlResponse, Protocol, WindowInfo},
     window::{AutoWindowId, AutoWindowState, WindowRegistry},
 };
 
@@ -72,6 +72,8 @@ pub struct AutoWC {
     pub chord_hold_duration: Duration,
     pub command_interval: Duration,
     pub protocol: Protocol,
+    pub control_responses: ControlResponseQueue,
+    pub delivered_control_responses: HashSet<ControlResponseHandle>,
     next_output_id: u64,
     pending_output: Output,
     screenshot_counter: u64,
@@ -172,6 +174,8 @@ impl AutoWC {
             chord_hold_duration: timing.chord_hold_duration,
             command_interval: timing.command_interval,
             protocol,
+            control_responses: ControlResponseQueue::default(),
+            delivered_control_responses: HashSet::new(),
             next_output_id,
             pending_output,
             screenshot_counter: 0,
@@ -292,6 +296,57 @@ impl AutoWC {
 
     pub fn has_pending_control_actions(&self) -> bool {
         !self.control_queue.is_empty() || self.next_control_action_at.is_some()
+    }
+
+    pub fn begin_control_response(&mut self) -> ControlResponseHandle {
+        self.control_responses.begin()
+    }
+
+    pub fn complete_control_response(
+        &mut self,
+        handle: ControlResponseHandle,
+        response: ControlResponse,
+    ) {
+        self.delivered_control_responses.remove(&handle);
+        self.control_responses.complete(handle, response);
+    }
+
+    pub fn note_control_response_delivered(&mut self, handle: ControlResponseHandle) {
+        self.delivered_control_responses.insert(handle);
+    }
+
+    pub fn flush_control_responses(&mut self) {
+        while let Some(response) = self.control_responses.pop_ready() {
+            self.protocol.send_response(&response);
+        }
+    }
+
+    pub fn fail_control_actions_for_window(&mut self, window_id: AutoWindowId, error: String) {
+        let mut failed = HashSet::new();
+        let delivered = self.delivered_control_responses.clone();
+        self.control_queue.retain(|action| {
+            if action.window_id != window_id {
+                true
+            } else if delivered.contains(&action.response) {
+                !action.kind.requires_live_window()
+            } else {
+                failed.insert(action.response);
+                false
+            }
+        });
+        self.pending_screenshots.retain(|request| {
+            if request.window_id == window_id {
+                failed.insert(request.response);
+                false
+            } else {
+                true
+            }
+        });
+
+        for handle in failed {
+            self.complete_control_response(handle, ControlResponse::Error(error.clone()));
+        }
+        self.flush_control_responses();
     }
 
     pub fn presentation_viewport(&self, window_id: AutoWindowId) -> Rectangle<i32, Physical> {
@@ -535,6 +590,16 @@ impl AutoWC {
             }
             self.promote_overlay(window_id);
             self.refresh_first_alive_window();
+            if self
+                .windows
+                .get(window_id)
+                .is_none_or(|window| window.is_empty())
+            {
+                self.fail_control_actions_for_window(
+                    window_id,
+                    format!("unknown window: {}", window_id.raw()),
+                );
+            }
             self.maybe_exit_when_empty();
             return;
         }
@@ -670,7 +735,12 @@ impl AutoWC {
         }
     }
 
-    pub fn queue_screenshot(&mut self, window_id: AutoWindowId, path: Option<PathBuf>) {
+    pub fn queue_screenshot(
+        &mut self,
+        window_id: AutoWindowId,
+        path: Option<PathBuf>,
+        response: ControlResponseHandle,
+    ) {
         let path = match path {
             Some(path) => path,
             None => {
@@ -680,8 +750,11 @@ impl AutoWC {
             }
         };
         debug!(?window_id, path = %path.display(), "queued screenshot");
-        self.pending_screenshots
-            .push_back(ScreenshotRequest { window_id, path });
+        self.pending_screenshots.push_back(ScreenshotRequest {
+            window_id,
+            path,
+            response,
+        });
     }
 
     pub fn request_shutdown(&mut self) {
@@ -1023,11 +1096,64 @@ pub struct ClientState {
 pub struct ScreenshotRequest {
     pub window_id: AutoWindowId,
     pub path: PathBuf,
+    pub response: ControlResponseHandle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ControlResponseHandle(u64);
+
+#[derive(Debug, Default)]
+pub struct ControlResponseQueue {
+    next_id: u64,
+    pending: VecDeque<PendingControlResponse>,
+}
+
+#[derive(Debug)]
+struct PendingControlResponse {
+    handle: ControlResponseHandle,
+    response: Option<ControlResponse>,
+}
+
+impl ControlResponseQueue {
+    pub fn begin(&mut self) -> ControlResponseHandle {
+        self.next_id += 1;
+        let handle = ControlResponseHandle(self.next_id);
+        self.pending.push_back(PendingControlResponse {
+            handle,
+            response: None,
+        });
+        handle
+    }
+
+    pub fn complete(&mut self, handle: ControlResponseHandle, response: ControlResponse) {
+        let Some(pending) = self
+            .pending
+            .iter_mut()
+            .find(|pending| pending.handle == handle)
+        else {
+            warn!(?handle, "cannot complete unknown control response");
+            return;
+        };
+
+        if pending.response.is_some() {
+            warn!(?handle, "control response already completed");
+            return;
+        }
+
+        pending.response = Some(response);
+    }
+
+    pub fn pop_ready(&mut self) -> Option<ControlResponse> {
+        let response = self.pending.front_mut()?.response.take()?;
+        self.pending.pop_front();
+        Some(response)
+    }
 }
 
 #[derive(Debug)]
 pub struct QueuedControlAction {
     pub window_id: AutoWindowId,
+    pub response: ControlResponseHandle,
     pub kind: QueuedControlActionKind,
 }
 
@@ -1037,9 +1163,32 @@ pub enum QueuedControlActionKind {
     PointerMove { x: f64, y: f64 },
     PointerButton { button: u32, state: ButtonState },
     Scroll { dx: f64, dy: f64 },
-    Screenshot { path: Option<PathBuf> },
+    Screenshot {
+        path: Option<PathBuf>,
+        delay_after: Duration,
+    },
     Quit,
     Delay(Duration),
+    Respond {
+        response: ControlResponse,
+        delay_after: Duration,
+    },
+}
+
+impl QueuedControlActionKind {
+    pub fn requires_live_window(&self) -> bool {
+        !matches!(self, Self::Delay(_) | Self::Respond { .. })
+    }
+
+    pub fn delivers_to_window(&self) -> bool {
+        matches!(
+            self,
+            Self::Key { .. }
+                | Self::PointerMove { .. }
+                | Self::PointerButton { .. }
+                | Self::Scroll { .. }
+        )
+    }
 }
 
 impl ClientData for ClientState {
@@ -1055,6 +1204,24 @@ impl ClientData for ClientState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_response_queue_flushes_ready_responses_in_order() {
+        let mut queue = ControlResponseQueue::default();
+        let first = queue.begin();
+        let second = queue.begin();
+
+        queue.complete(second, ControlResponse::Ok);
+        assert!(queue.pop_ready().is_none());
+
+        queue.complete(first, ControlResponse::Error("first failed".to_string()));
+        assert_eq!(
+            queue.pop_ready(),
+            Some(ControlResponse::Error("first failed".to_string()))
+        );
+        assert_eq!(queue.pop_ready(), Some(ControlResponse::Ok));
+        assert!(queue.pop_ready().is_none());
+    }
 
     #[test]
     fn cleanup_screenshot_paths_removes_existing_files_and_ignores_missing_files() {

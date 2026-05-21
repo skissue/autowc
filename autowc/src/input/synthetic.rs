@@ -11,45 +11,78 @@ use smithay::{
 
 use crate::{
     control::{text_to_key_events, ControlCommand, ControlCommandVariant},
-    state::{AutoWC, QueuedControlAction, QueuedControlActionKind},
+    protocol::ControlResponse,
+    state::{AutoWC, ControlResponseHandle, QueuedControlAction, QueuedControlActionKind},
     window::AutoWindowId,
 };
 use tracing::{debug, trace};
 
 impl AutoWC {
-    pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
+    pub fn process_control_command(
+        &mut self,
+        command: ControlCommand,
+        response: ControlResponseHandle,
+    ) {
         debug!(window = ?command.window, variant = ?command.variant, "processing control command");
         if let ControlCommandVariant::Launch { command } = &command.variant {
-            return self.launch_child(command);
+            let command_response = match self.launch_child(command) {
+                Ok(()) => ControlResponse::Ok,
+                Err(err) => ControlResponse::Error(err),
+            };
+            self.complete_control_response(response, command_response);
+            return;
         }
         if command.variant == ControlCommandVariant::List {
-            return Ok(());
+            let windows = self.window_infos();
+            self.complete_control_response(response, ControlResponse::WindowList { windows });
+            return;
         }
 
         let window_id = match command.window {
             Some(window) => {
-                let window_id = AutoWindowId::from_raw(window)
-                    .ok_or_else(|| "invalid window id".to_string())?;
+                let Some(window_id) = AutoWindowId::from_raw(window) else {
+                    self.complete_control_response(
+                        response,
+                        ControlResponse::Error("invalid window id".to_string()),
+                    );
+                    return;
+                };
                 if self
                     .windows
                     .get(window_id)
                     .is_none_or(|window| window.is_empty())
                 {
-                    return Err(format!("unknown window: {}", window_id.raw()));
+                    self.complete_control_response(
+                        response,
+                        ControlResponse::Error(format!("unknown window: {}", window_id.raw())),
+                    );
+                    return;
                 }
                 window_id
             }
-            None => self
-                .first_alive_window_id
-                .ok_or_else(|| "no windows are open".to_string())?,
+            None => match self.first_alive_window_id {
+                Some(window_id) => window_id,
+                None => {
+                    self.complete_control_response(
+                        response,
+                        ControlResponse::Error("no windows are open".to_string()),
+                    );
+                    return;
+                }
+            },
         };
         debug!(?window_id, "control command target selected");
+
+        let responds_with_screenshot =
+            matches!(&command.variant, ControlCommandVariant::Screenshot { .. });
+        let responds_from_action = matches!(&command.variant, ControlCommandVariant::Quit);
 
         match command.variant {
             ControlCommandVariant::Key { code, action } => {
                 for state in action.key_states() {
                     self.queue_control_action(
                         window_id,
+                        response,
                         QueuedControlActionKind::Key {
                             code,
                             state: *state,
@@ -57,6 +90,7 @@ impl AutoWC {
                     );
                     self.queue_control_action(
                         window_id,
+                        response,
                         QueuedControlActionKind::Delay(self.key_event_interval),
                     );
                 }
@@ -66,6 +100,7 @@ impl AutoWC {
                 while let Some(code) = pressed_codes.next() {
                     self.queue_control_action(
                         window_id,
+                        response,
                         QueuedControlActionKind::Key {
                             code: *code,
                             state: KeyState::Pressed,
@@ -74,17 +109,20 @@ impl AutoWC {
                     if pressed_codes.peek().is_some() {
                         self.queue_control_action(
                             window_id,
+                            response,
                             QueuedControlActionKind::Delay(self.chord_key_interval),
                         );
                     }
                 }
                 self.queue_control_action(
                     window_id,
+                    response,
                     QueuedControlActionKind::Delay(self.chord_hold_duration),
                 );
                 for code in codes.iter().rev() {
                     self.queue_control_action(
                         window_id,
+                        response,
                         QueuedControlActionKind::Key {
                             code: *code,
                             state: KeyState::Released,
@@ -93,14 +131,23 @@ impl AutoWC {
                 }
                 self.queue_control_action(
                     window_id,
+                    response,
                     QueuedControlActionKind::Delay(self.key_event_interval),
                 );
             }
             ControlCommandVariant::Text(text) => {
-                for (code, action) in text_to_key_events(&text)? {
+                let events = match text_to_key_events(&text) {
+                    Ok(events) => events,
+                    Err(err) => {
+                        self.complete_control_response(response, ControlResponse::Error(err));
+                        return;
+                    }
+                };
+                for (code, action) in events {
                     for state in action.key_states() {
                         self.queue_control_action(
                             window_id,
+                            response,
                             QueuedControlActionKind::Key {
                                 code,
                                 state: *state,
@@ -108,18 +155,24 @@ impl AutoWC {
                         );
                         self.queue_control_action(
                             window_id,
+                            response,
                             QueuedControlActionKind::Delay(self.key_event_interval),
                         );
                     }
                 }
             }
             ControlCommandVariant::PointerMove { x, y } => {
-                self.queue_control_action(window_id, QueuedControlActionKind::PointerMove { x, y });
+                self.queue_control_action(
+                    window_id,
+                    response,
+                    QueuedControlActionKind::PointerMove { x, y },
+                );
             }
             ControlCommandVariant::PointerButton { button, action } => {
                 for state in action.button_states() {
                     self.queue_control_action(
                         window_id,
+                        response,
                         QueuedControlActionKind::PointerButton {
                             button,
                             state: *state,
@@ -128,9 +181,14 @@ impl AutoWC {
                 }
             }
             ControlCommandVariant::Click { x, y, button } => {
-                self.queue_control_action(window_id, QueuedControlActionKind::PointerMove { x, y });
                 self.queue_control_action(
                     window_id,
+                    response,
+                    QueuedControlActionKind::PointerMove { x, y },
+                );
+                self.queue_control_action(
+                    window_id,
+                    response,
                     QueuedControlActionKind::PointerButton {
                         button,
                         state: ButtonState::Pressed,
@@ -138,6 +196,7 @@ impl AutoWC {
                 );
                 self.queue_control_action(
                     window_id,
+                    response,
                     QueuedControlActionKind::PointerButton {
                         button,
                         state: ButtonState::Released,
@@ -145,32 +204,46 @@ impl AutoWC {
                 );
             }
             ControlCommandVariant::Scroll { dx, dy } => {
-                self.queue_control_action(window_id, QueuedControlActionKind::Scroll { dx, dy });
+                self.queue_control_action(
+                    window_id,
+                    response,
+                    QueuedControlActionKind::Scroll { dx, dy },
+                );
             }
             ControlCommandVariant::Screenshot { path } => {
-                self.queue_control_action(window_id, QueuedControlActionKind::Screenshot { path });
+                self.queue_control_action(
+                    window_id,
+                    response,
+                    QueuedControlActionKind::Screenshot {
+                        path,
+                        delay_after: self.command_interval,
+                    },
+                );
             }
             ControlCommandVariant::Sleep { duration_ms } => {
                 self.queue_control_action(
                     window_id,
+                    response,
                     QueuedControlActionKind::Delay(Duration::from_millis(duration_ms)),
                 );
             }
             ControlCommandVariant::Launch { .. } => unreachable!("launch is handled immediately"),
             ControlCommandVariant::List => unreachable!("list is handled by the protocol layer"),
             ControlCommandVariant::Quit => {
-                self.queue_control_action(window_id, QueuedControlActionKind::Quit);
+                self.queue_control_action(window_id, response, QueuedControlActionKind::Quit);
             }
         }
 
-        if !self.command_interval.is_zero() {
+        if !responds_with_screenshot && !responds_from_action {
             self.queue_control_action(
                 window_id,
-                QueuedControlActionKind::Delay(self.command_interval),
+                response,
+                QueuedControlActionKind::Respond {
+                    response: ControlResponse::Ok,
+                    delay_after: self.command_interval,
+                },
             );
         }
-
-        Ok(())
     }
 
     pub fn process_pending_control_actions(&mut self) {
@@ -185,6 +258,25 @@ impl AutoWC {
 
         while let Some(action) = self.control_queue.pop_front() {
             trace!(?action, "processing queued control action");
+            if action.kind.requires_live_window()
+                && self
+                    .windows
+                    .get(action.window_id)
+                    .is_none_or(|window| window.is_empty())
+            {
+                self.complete_control_response(
+                    action.response,
+                    ControlResponse::Error(format!("unknown window: {}", action.window_id.raw())),
+                );
+                self.control_queue
+                    .retain(|queued| queued.response != action.response);
+                self.flush_control_responses();
+                continue;
+            }
+            if action.kind.delivers_to_window() {
+                self.note_control_response_delivered(action.response);
+            }
+
             match action.kind {
                 QueuedControlActionKind::Key { code, state } => {
                     self.process_virtual_input_event(action.window_id, code, state);
@@ -198,24 +290,49 @@ impl AutoWC {
                 QueuedControlActionKind::Scroll { dx, dy } => {
                     self.process_virtual_scroll(dx, dy);
                 }
-                QueuedControlActionKind::Screenshot { path } => {
-                    self.queue_screenshot(action.window_id, path);
+                QueuedControlActionKind::Screenshot { path, delay_after } => {
+                    self.queue_screenshot(action.window_id, path, action.response);
+                    if !delay_after.is_zero() {
+                        self.next_control_action_at = Some(Instant::now() + delay_after);
+                        return;
+                    }
                 }
                 QueuedControlActionKind::Quit => {
                     self.request_shutdown();
+                    self.complete_control_response(action.response, ControlResponse::Ok);
+                    self.flush_control_responses();
                 }
                 QueuedControlActionKind::Delay(duration) => {
                     self.next_control_action_at = Some(Instant::now() + duration);
                     return;
                 }
+                QueuedControlActionKind::Respond {
+                    response,
+                    delay_after,
+                } => {
+                    self.complete_control_response(action.response, response);
+                    self.flush_control_responses();
+                    if !delay_after.is_zero() {
+                        self.next_control_action_at = Some(Instant::now() + delay_after);
+                        return;
+                    }
+                }
             }
         }
     }
 
-    fn queue_control_action(&mut self, window_id: AutoWindowId, kind: QueuedControlActionKind) {
+    fn queue_control_action(
+        &mut self,
+        window_id: AutoWindowId,
+        response: ControlResponseHandle,
+        kind: QueuedControlActionKind,
+    ) {
         trace!(?window_id, ?kind, "queueing control action");
-        self.control_queue
-            .push_back(QueuedControlAction { window_id, kind });
+        self.control_queue.push_back(QueuedControlAction {
+            window_id,
+            response,
+            kind,
+        });
     }
 
     pub fn process_virtual_input_event(

@@ -21,7 +21,7 @@ use smithay::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-use crate::{host, screenshot, window::AutoWindowId, AutoWC};
+use crate::{host, protocol::ControlResponse, screenshot, window::AutoWindowId, AutoWC};
 
 struct RenderWindow {
     output: Output,
@@ -378,15 +378,19 @@ fn write_pending_screenshots(
         match result {
             Ok(()) => {
                 info!(?auto_window_id, path = %request.path.display(), "screenshot written");
-                state
-                    .protocol
-                    .send_screenshot(screenshot::display_path(&request.path));
+                state.complete_control_response(
+                    request.response,
+                    ControlResponse::Screenshot {
+                        path: screenshot::display_path(&request.path),
+                    },
+                );
             }
             Err(err) => {
                 error!(?auto_window_id, path = %request.path.display(), error = %err, "failed to write screenshot");
-                state.protocol.send_error(err);
+                state.complete_control_response(request.response, ControlResponse::Error(err));
             }
         }
+        state.flush_control_responses();
     }
 }
 

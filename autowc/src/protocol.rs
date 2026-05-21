@@ -19,20 +19,21 @@ impl Protocol {
         }
     }
 
-    pub fn send_ok(self) {
-        send(self.format_ok());
+    pub fn send_response(self, response: &ControlResponse) {
+        send(self.format_response(response));
     }
 
     pub fn send_error(self, error: impl AsRef<str>) {
         send(self.format_error(error));
     }
 
-    pub fn send_screenshot(self, path: impl AsRef<str>) {
-        send(self.format_screenshot(path));
-    }
-
-    pub fn send_window_list(self, windows: &[WindowInfo]) {
-        send(self.format_window_list(windows));
+    pub fn format_response(self, response: &ControlResponse) -> String {
+        match response {
+            ControlResponse::Ok => self.format_ok(),
+            ControlResponse::Error(error) => self.format_error(error),
+            ControlResponse::Screenshot { path } => self.format_screenshot(path),
+            ControlResponse::WindowList { windows } => self.format_window_list(windows),
+        }
     }
 
     pub fn format_ok(self) -> String {
@@ -94,6 +95,14 @@ pub struct WindowInfo {
     pub height: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlResponse {
+    Ok,
+    Error(String),
+    Screenshot { path: String },
+    WindowList { windows: Vec<WindowInfo> },
+}
+
 #[derive(Serialize)]
 struct OkResponse {
     ok: bool,
@@ -126,6 +135,28 @@ fn serialize_response<T: Serialize>(response: &T) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_control_response_shapes() {
+        assert_eq!(Protocol::Plain.format_response(&ControlResponse::Ok), "ok");
+        assert_eq!(
+            Protocol::Json.format_response(&ControlResponse::Screenshot {
+                path: "/tmp/autowc.png".to_string(),
+            }),
+            r#"{"ok":true,"type":"screenshot","path":"/tmp/autowc.png"}"#
+        );
+        assert_eq!(
+            Protocol::Json.format_response(&ControlResponse::WindowList {
+                windows: vec![WindowInfo {
+                    id: 2,
+                    title: "GTK Demo".to_string(),
+                    width: 800,
+                    height: 600,
+                }],
+            }),
+            r#"{"ok":true,"windows":[{"id":2,"title":"GTK Demo","width":800,"height":600}]}"#
+        );
+    }
 
     #[test]
     fn formats_plain_responses() {

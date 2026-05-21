@@ -34,10 +34,6 @@ impl ControlCommand {
             None => Ok(Self::new(variant)),
         }
     }
-
-    pub fn responds_with_screenshot(&self) -> bool {
-        matches!(self.variant, ControlCommandVariant::Screenshot { .. })
-    }
 }
 
 impl PartialEq<ControlCommandVariant> for ControlCommand {
