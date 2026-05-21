@@ -729,6 +729,44 @@ impl AutoWC {
         self.focus_window(window_id, window.as_ref());
     }
 
+    fn focus_initial_auto_window(&mut self, window_id: AutoWindowId) {
+        let Some(window) = self
+            .windows
+            .get(window_id)
+            .and_then(|window| window.next_focus_window())
+        else {
+            self.focus_window(window_id, None);
+            return;
+        };
+        let surface = window.toplevel().unwrap().wl_surface().clone();
+
+        self.windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .space_mut()
+            .raise_element(&window, true);
+
+        // HACK: Some clients (Chromium) ignore the first keyboard enter for a
+        // newly mapped nested toplevel. Force a keyboard leave/enter cycle for
+        // initial focus only, without toggling xdg activation. This should
+        // probably be correctly fixed at some point.
+        let keyboard = self.seat.get_keyboard().unwrap();
+        self.focused_window_id = Some(window_id);
+        keyboard.set_focus(self, Some(surface.clone()), SERIAL_COUNTER.next_serial());
+        self.focused_window_id = None;
+        keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
+        self.focused_window_id = Some(window_id);
+        keyboard.set_focus(self, Some(surface.clone()), SERIAL_COUNTER.next_serial());
+
+        for window in self.mapped_windows() {
+            let toplevel = window.toplevel().unwrap();
+            let activated = toplevel.wl_surface() == &surface;
+            if window.set_activated(activated) && toplevel.is_initial_configure_sent() {
+                toplevel.send_pending_configure();
+            }
+        }
+    }
+
     pub fn blur_auto_window(&mut self, window_id: AutoWindowId) {
         if self.focused_window_id == Some(window_id) {
             self.focus_window(window_id, None);
@@ -933,7 +971,7 @@ impl AutoWC {
             .expect("AutoWC window is missing")
             .set_state(AutoWindowState::Mapped);
         info!(?window_id, "mapped toplevel");
-        self.focus_window(window_id, Some(&window));
+        self.focus_initial_auto_window(window_id);
     }
 
     fn preferred_toplevel_size(&self, window: &Window) -> Size<i32, Logical> {
