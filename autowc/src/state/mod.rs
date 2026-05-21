@@ -552,6 +552,7 @@ impl AutoWC {
 
         let child = Command::new(program)
             .args(args)
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
