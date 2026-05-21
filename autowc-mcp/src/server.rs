@@ -22,18 +22,20 @@ const SERVER_INSTRUCTIONS: &str = "\
 AutoWC runs applications inside nested compositor sessions for GUI automation.
 
 Typical flow:
-1. launch starts a session by running a command inside AutoWC.
-2. run sends an ordered batch of input commands to that session.
-3. screenshot observes the current framebuffer without sending input.
-4. close stops the compositor process.
+1. `launch` starts a process inside the server's running AutoWC compositor.
+2. `list` reports the currently open windows and their stable AutoWC window IDs.
+3. `run` sends an ordered batch of input commands, optionally targeting a specific window.
+4. `screenshot` observes the current framebuffer, optionally targeting a specific window.
 
-Mouse coordinates are virtual-display pixels with the origin at the top-left of the AutoWC display. Launch defaults to dynamic resizing, where the virtual display follows the host window size. Use the launch defaults unless you specifically need a fixed-size output for stable screenshots or coordinates; for fixed output, provide both width and height.
+The MCP server owns one AutoWC compositor session. It starts AutoWC automatically with dynamic resizing and stay-alive enabled. The `launch` tool only starts an application process inside that compositor.
 
-Keyboard commands use W3C KeyboardEvent.code physical key names, such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5.
+When more than one window is open, call `list` and then pass the desired window ID to `run` or `screenshot`. If `window` is omitted, AutoWC uses the first existing window (lowest ID).
 
-The run tool returns a final screenshot by default so agents can observe the result of a batch. Set return_screenshot to false only when intentionally running without immediate visual feedback.
+Mouse coordinates are virtual-display pixels with the origin at the top-left of the target AutoWC window. Keyboard commands use W3C KeyboardEvent.code physical key names, such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5.
 
-If a session exits, later tool calls return ok=false with the captured stderr log.";
+The run tool returns a final screenshot by default so agents can observe the result of their commands. When `run` has a `window` target, the returned screenshot uses the same target. Set `return_screenshot` to false only when intentionally running without immediate visual feedback or if your commands intend to close the targeted window.
+
+If AutoWC exits, later tool calls return ok=false with the captured stderr log.";
 
 #[derive(Debug, Clone)]
 pub struct AutoWcMcpServer {
@@ -301,10 +303,12 @@ mod tests {
     #[test]
     fn server_instructions_are_the_canonical_usage_guide() {
         assert!(SERVER_INSTRUCTIONS.contains("Typical flow"));
-        assert!(SERVER_INSTRUCTIONS.contains("Launch defaults to dynamic resizing"));
-        assert!(SERVER_INSTRUCTIONS.contains("Use the launch defaults"));
+        assert!(SERVER_INSTRUCTIONS.contains("one AutoWC compositor session"));
+        assert!(SERVER_INSTRUCTIONS.contains("starts AutoWC automatically"));
+        assert!(SERVER_INSTRUCTIONS.contains("call `list`"));
         assert!(SERVER_INSTRUCTIONS.contains("return_screenshot"));
         assert!(SERVER_INSTRUCTIONS.contains("W3C KeyboardEvent.code"));
+        assert!(!SERVER_INSTRUCTIONS.contains("close stops"));
         assert!(!SERVER_INSTRUCTIONS.contains("KEY_*"));
         assert!(!SERVER_INSTRUCTIONS.contains("newline characters"));
     }
