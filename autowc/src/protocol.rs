@@ -43,7 +43,13 @@ impl Protocol {
 
     pub fn format_ok_with_new_windows(self, new_windows: &[WindowInfo]) -> String {
         match self {
-            Self::Plain => "ok".into(),
+            Self::Plain => {
+                let mut response = String::from("ok");
+                for window in new_windows {
+                    response.push_str(&format!(" {} {}", window.id, window.title));
+                }
+                response
+            }
             Self::Json => serialize_response(&OkWithNewWindowsResponse {
                 ok: true,
                 new_windows,
@@ -120,6 +126,13 @@ mod tests {
     #[test]
     fn formats_plain_responses() {
         assert_eq!(Protocol::Plain.format_ok(), "ok");
+        assert_eq!(
+            Protocol::Plain.format_ok_with_new_windows(&[WindowInfo {
+                id: 2,
+                title: "GTK Demo".to_string(),
+            }]),
+            "ok 2 GTK Demo"
+        );
         assert_eq!(Protocol::Plain.format_error("bad input"), "error bad input");
         assert_eq!(
             Protocol::Plain.format_screenshot("/tmp/autowc.png"),
