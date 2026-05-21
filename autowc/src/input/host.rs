@@ -11,6 +11,7 @@ use smithay::{
 };
 
 use crate::{state::AutoWC, window::AutoWindowId};
+use tracing::trace;
 
 impl AutoWC {
     pub fn process_input_event<I: InputBackend>(
@@ -20,6 +21,7 @@ impl AutoWC {
     ) {
         match event {
             InputEvent::Keyboard { event, .. } => {
+                trace!(?window_id, key_code = ?event.key_code(), state = ?event.state(), "forwarding host keyboard input");
                 self.focus_auto_window(window_id);
 
                 let serial = SERIAL_COUNTER.next_serial();
@@ -38,6 +40,7 @@ impl AutoWC {
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
                 let host_pos: Point<f64, Physical> = (event.x(), event.y()).into();
+                trace!(?window_id, ?host_pos, "forwarding host pointer motion");
                 let pointer = self.seat.get_pointer().unwrap();
 
                 let (pos, under) = self
@@ -64,6 +67,12 @@ impl AutoWC {
                 let button = event.button_code();
 
                 let button_state = event.state();
+                trace!(
+                    ?window_id,
+                    button,
+                    ?button_state,
+                    "forwarding host pointer button"
+                );
 
                 if button_state == ButtonState::Pressed && !pointer.is_grabbed() {
                     let focus = self.element_under(window_id, pointer.current_location());
@@ -83,6 +92,7 @@ impl AutoWC {
             }
             InputEvent::PointerAxis { event, .. } => {
                 let source = event.source();
+                trace!(?window_id, ?source, "forwarding host pointer axis");
 
                 let horizontal_amount = event.amount(Axis::Horizontal).unwrap_or_else(|| {
                     event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * 15.0 / 120.

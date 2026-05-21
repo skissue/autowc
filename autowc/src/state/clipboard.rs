@@ -8,6 +8,7 @@ use smithay::{
         data_device::request_data_device_client_selection, SelectionSource, SelectionTarget,
     },
 };
+use tracing::{debug, error, trace, warn};
 use wl_clipboard_rs::copy::{
     clear, ClipboardType, MimeType as HostMimeType, Options as HostClipboardOptions,
     Seat as HostSeat, Source as HostClipboardSource,
@@ -30,19 +31,23 @@ impl AutoWC {
         seat: Seat<Self>,
     ) {
         if ty != SelectionTarget::Clipboard {
+            trace!(?ty, "ignoring non-clipboard selection update");
             return;
         }
 
         let Some(source) = source else {
+            debug!("nested clipboard source cleared");
             self.clear_host_clipboard();
             return;
         };
 
         let mime_types = source.mime_types();
         let Some(mime_type) = preferred_clipboard_mime_type(&mime_types) else {
+            warn!("clipboard source advertised no mime types");
             return;
         };
 
+        debug!(%mime_type, "queued clipboard sync to host");
         self.pending_clipboard_sync = Some(PendingClipboardSync { seat, mime_type });
     }
 
@@ -53,7 +58,7 @@ impl AutoWC {
         };
 
         if let Err(err) = self.copy_selection_to_host_clipboard(seat, mime_type) {
-            eprintln!("AutoWC failed to sync clipboard to host: {err}");
+            error!(error = %err, "failed to sync clipboard to host");
         }
     }
 
@@ -63,7 +68,7 @@ impl AutoWC {
             if self.clipboard_sync_threads[index].is_finished() {
                 let thread = self.clipboard_sync_threads.swap_remove(index);
                 if thread.join().is_err() {
-                    eprintln!("AutoWC host clipboard sync thread panicked");
+                    error!("host clipboard sync thread panicked");
                 }
             } else {
                 index += 1;
@@ -78,18 +83,20 @@ impl AutoWC {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (mut read_end, write_end) = UnixStream::pair()?;
         let fd: OwnedFd = write_end.into();
+        debug!(%mime_type, "requesting nested clipboard data");
         request_data_device_client_selection(&seat, mime_type.clone(), fd)?;
 
         let host_wayland_display = self.host_wayland_display.clone();
         let thread = thread::spawn(move || {
             let mut bytes = Vec::new();
             if let Err(err) = read_end.read_to_end(&mut bytes) {
-                eprintln!("AutoWC failed to read nested clipboard data: {err}");
+                error!(error = %err, "failed to read nested clipboard data");
                 return;
             }
 
+            debug!(byte_count = bytes.len(), %mime_type, "copying clipboard data to host");
             if let Err(err) = copy_bytes_to_host_clipboard(host_wayland_display, mime_type, bytes) {
-                eprintln!("AutoWC failed to copy clipboard data to host: {err}");
+                error!(error = %err, "failed to copy clipboard data to host");
             }
         });
         self.clipboard_sync_threads.push(thread);
@@ -100,11 +107,12 @@ impl AutoWC {
     fn clear_host_clipboard(&mut self) {
         let host_wayland_display = self.host_wayland_display.clone();
         let thread = thread::spawn(move || {
+            debug!("clearing host clipboard");
             let result = with_host_wayland_display(host_wayland_display, || {
                 clear(ClipboardType::Regular, HostSeat::All)
             });
             if let Err(err) = result {
-                eprintln!("AutoWC failed to clear host clipboard: {err}");
+                error!(error = %err, "failed to clear host clipboard");
             }
         });
         self.clipboard_sync_threads.push(thread);

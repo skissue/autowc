@@ -13,6 +13,7 @@ use smithay::{
 };
 
 use crate::AutoWC;
+use tracing::{debug, trace};
 
 impl XdgShellHandler for AutoWC {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
@@ -20,11 +21,13 @@ impl XdgShellHandler for AutoWC {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        debug!("xdg toplevel created");
         let window = Window::new_wayland_window(surface);
         self.map_new_toplevel(window);
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+        debug!("xdg popup created");
         self.unconstrain_popup(&surface);
         let _ = self.popups.track_popup(PopupKind::Xdg(surface));
     }
@@ -35,6 +38,7 @@ impl XdgShellHandler for AutoWC {
         positioner: PositionerState,
         token: u32,
     ) {
+        debug!(token, "xdg popup reposition requested");
         surface.with_pending_state(|state| {
             let geometry = positioner.get_geometry();
             state.geometry = geometry;
@@ -45,10 +49,12 @@ impl XdgShellHandler for AutoWC {
     }
 
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
+        trace!("xdg popup grab requested");
         // TODO popup grabs
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        debug!("xdg toplevel destroyed");
         self.remove_toplevel(surface.wl_surface());
     }
 }
@@ -58,6 +64,7 @@ delegate_xdg_shell!(AutoWC);
 
 /// Should be called on `WlSurface::commit`
 pub fn handle_commit(state: &mut AutoWC, surface: &WlSurface) {
+    trace!("xdg surface commit");
     // Handle toplevel commits.
     let window = state.windows.find_window_by_surface(surface);
 

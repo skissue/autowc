@@ -8,6 +8,7 @@ use smithay::{
     },
     utils::{Logical, Physical, Size},
 };
+use tracing::{debug, trace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AutoWindowId(u64);
@@ -37,6 +38,7 @@ impl WindowRegistry {
         self.next_id += 1;
         let id = AutoWindowId(self.next_id);
         self.windows.insert(id, AutoWindow::new(id));
+        debug!(?id, "registered auto window");
         id
     }
 
@@ -162,6 +164,7 @@ impl AutoWindow {
     }
 
     pub fn set_state(&mut self, state: AutoWindowState) {
+        debug!(id = ?self.id, from = ?self.state, to = ?state, "auto window state changed");
         self.state = state;
     }
 
@@ -170,10 +173,12 @@ impl AutoWindow {
     }
 
     pub fn set_primary_window(&mut self, window: Window) {
+        trace!(id = ?self.id, "setting primary window");
         self.primary_window = Some(window);
     }
 
     pub fn set_output(&mut self, output: Output) {
+        trace!(id = ?self.id, output = output.name(), "setting window output");
         self.output = Some(output);
     }
 
@@ -183,24 +188,35 @@ impl AutoWindow {
         host_size: Size<i32, Physical>,
         virtual_size: Size<i32, Logical>,
     ) {
+        trace!(
+            id = ?self.id,
+            ?host_window_id,
+            ?host_size,
+            ?virtual_size,
+            "setting host window"
+        );
         self.host_window_id = Some(host_window_id);
         self.host_size = Some(host_size);
         self.virtual_size = Some(virtual_size);
     }
 
     pub fn set_host_size(&mut self, host_size: Size<i32, Physical>) {
+        trace!(id = ?self.id, ?host_size, "setting host size");
         self.host_size = Some(host_size);
     }
 
     pub fn set_virtual_size(&mut self, virtual_size: Size<i32, Logical>) {
+        trace!(id = ?self.id, ?virtual_size, "setting virtual size");
         self.virtual_size = Some(virtual_size);
     }
 
     pub fn take_primary_window(&mut self) -> Option<Window> {
+        trace!(id = ?self.id, "taking primary window");
         self.primary_window.take()
     }
 
     pub fn push_overlay_window(&mut self, window: Window) {
+        debug!(id = ?self.id, "adding overlay window");
         self.overlay_windows.push(window);
     }
 
@@ -224,6 +240,7 @@ impl AutoWindow {
 
     pub fn promote_last_overlay(&mut self) -> Option<Window> {
         let window = self.overlay_windows.pop()?;
+        debug!(id = ?self.id, "promoting overlay window");
         self.primary_window = Some(window.clone());
         Some(window)
     }

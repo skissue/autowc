@@ -14,9 +14,11 @@ use crate::{
     state::{AutoWC, QueuedControlAction, QueuedControlActionKind},
     window::AutoWindowId,
 };
+use tracing::{debug, trace};
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
+        debug!(window = ?command.window, variant = ?command.variant, "processing control command");
         if let ControlCommandVariant::Launch { command } = &command.variant {
             return self.launch_child(command);
         }
@@ -41,6 +43,7 @@ impl AutoWC {
                 .first_alive_window_id
                 .ok_or_else(|| "no windows are open".to_string())?,
         };
+        debug!(?window_id, "control command target selected");
 
         match command.variant {
             ControlCommandVariant::Key { code, action } => {
@@ -181,6 +184,7 @@ impl AutoWC {
         self.next_control_action_at = None;
 
         while let Some(action) = self.control_queue.pop_front() {
+            trace!(?action, "processing queued control action");
             match action.kind {
                 QueuedControlActionKind::Key { code, state } => {
                     self.process_virtual_input_event(action.window_id, code, state);
@@ -209,6 +213,7 @@ impl AutoWC {
     }
 
     fn queue_control_action(&mut self, window_id: AutoWindowId, kind: QueuedControlActionKind) {
+        trace!(?window_id, ?kind, "queueing control action");
         self.control_queue
             .push_back(QueuedControlAction { window_id, kind });
     }
@@ -223,6 +228,14 @@ impl AutoWC {
 
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.now_msec();
+        trace!(
+            ?window_id,
+            code,
+            ?state,
+            ?serial,
+            time,
+            "sending virtual key event"
+        );
 
         self.seat.get_keyboard().unwrap().input::<(), _>(
             self,
@@ -242,6 +255,13 @@ impl AutoWC {
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.seat.get_pointer().unwrap();
         let under = self.surface_under(window_id, pos);
+        trace!(
+            ?window_id,
+            ?pos,
+            has_surface = under.is_some(),
+            ?serial,
+            "sending virtual pointer motion"
+        );
 
         pointer.motion(
             self,
@@ -258,6 +278,7 @@ impl AutoWC {
     pub fn process_virtual_pointer_button(&mut self, button: u32, state: ButtonState) {
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.seat.get_pointer().unwrap();
+        trace!(button, ?state, ?serial, "sending virtual pointer button");
 
         pointer.button(
             self,
@@ -272,6 +293,7 @@ impl AutoWC {
     }
 
     pub fn process_virtual_scroll(&mut self, dx: f64, dy: f64) {
+        trace!(dx, dy, "sending virtual scroll");
         let mut frame = AxisFrame::new(self.now_msec()).source(AxisSource::Wheel);
         if dx != 0.0 {
             frame = frame.value(Axis::Horizontal, dx);

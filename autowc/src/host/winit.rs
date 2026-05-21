@@ -36,17 +36,20 @@ use smithay::{
     },
     utils::{Clock, Monotonic, Physical, Rectangle, Size},
 };
+use tracing::{debug, error, info, trace, warn};
 
 use crate::window::AutoWindowId;
 
 pub fn init_from_attributes(
     attributes: WindowAttributes,
 ) -> Result<(HostGraphicsBackend, HostEventLoop, HostWindowRequester), Box<dyn std::error::Error>> {
+    debug!("building winit event loop");
     let event_loop = WinitEventLoop::<HostWindowRequest>::with_user_event().build()?;
     let event_loop_proxy = event_loop.create_proxy();
 
     #[allow(deprecated)]
     let window = Arc::new(event_loop.create_window(attributes)?);
+    debug!(window_id = ?window.id(), "created startup host window");
     let (display, context, egl_surface, is_x11) = create_initial_egl_surface(&window)?;
     let pixel_format = context
         .pixel_format()
@@ -55,6 +58,7 @@ pub fn init_from_attributes(
 
     let renderer = unsafe { GlesRenderer::new(context)? };
     let damage_tracking = display.supports_damage();
+    debug!(damage_tracking, "initialized host renderer");
 
     event_loop.set_control_flow(smithay::reexports::winit::event_loop::ControlFlow::Poll);
     let scale_factor = window.scale_factor();
@@ -108,6 +112,7 @@ pub fn init_from_attributes(
 fn create_initial_egl_surface(
     window: &Arc<WinitWindow>,
 ) -> Result<(EGLDisplay, EGLContext, EGLSurface, bool), Box<dyn std::error::Error>> {
+    debug!(window_id = ?window.id(), "creating initial EGL surface");
     let display = unsafe { EGLDisplay::new(window.clone())? };
 
     let gl_attributes = GlAttributes {
@@ -157,6 +162,7 @@ fn create_window_egl_surface(
                 EGLSurface::new(display, pixel_format, config_id, surface)
                     .map_err(EglError::CreationFailed)?
             };
+            debug!(window_id = ?window.id(), "created Wayland EGL surface");
             Ok((egl_surface, false))
         }
         Ok(RawWindowHandle::Xlib(handle)) => {
@@ -169,6 +175,7 @@ fn create_window_egl_surface(
                 )
                 .map_err(EglError::CreationFailed)?
             };
+            debug!(window_id = ?window.id(), "created X11 EGL surface");
             Ok((egl_surface, true))
         }
         _ => return Err("only Wayland and X11 host windows are supported".into()),
@@ -187,6 +194,7 @@ impl HostWindowRequester {
         size: Size<i32, smithay::utils::Logical>,
     ) {
         let size = size.to_f64();
+        debug!(?auto_window_id, ?size, "requesting host window creation");
         let attributes = WinitWindow::default_attributes()
             .with_inner_size(LogicalSize::new(size.w, size.h))
             .with_title("AutoWC")
@@ -198,6 +206,7 @@ impl HostWindowRequester {
     }
 
     pub fn close_window(&self, window_id: WindowId) {
+        debug!(?window_id, "requesting host window close");
         let _ = self
             .event_loop_proxy
             .send_event(HostWindowRequest::Close { window_id });
@@ -236,6 +245,7 @@ impl HostGraphicsBackend {
         window: Arc<WinitWindow>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let window_id = window.id();
+        debug!(?window_id, "adding host render window");
         let (egl_surface, _) =
             create_window_egl_surface(&self._display, self.pixel_format, self.config_id, &window)?;
         self.windows.insert(
@@ -250,6 +260,7 @@ impl HostGraphicsBackend {
     }
 
     pub fn remove_window(&mut self, window_id: WindowId) {
+        debug!(?window_id, "removing host render window");
         self.windows.remove(&window_id);
     }
 
@@ -306,6 +317,7 @@ impl HostGraphicsBackend {
         window_id: WindowId,
         damage: Option<&[Rectangle<i32, Physical>]>,
     ) -> Result<(), SwapBuffersError> {
+        trace!(?window_id, "submitting host render window");
         let window = self
             .windows
             .get_mut(&window_id)
@@ -395,6 +407,10 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
         self.inner.clock.now().as_micros()
     }
 
+    fn is_startup_window(&self, window_id: WindowId) -> bool {
+        window_id == self.inner.startup_window_id
+    }
+
     fn window(&self, window_id: WindowId) -> Option<&HostEventWindow> {
         self.inner.windows.get(&window_id)
     }
@@ -421,6 +437,14 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
                         window.window_handle().map(|handle| handle.as_raw()),
                         Ok(RawWindowHandle::Xlib(_))
                     );
+                    info!(
+                        ?auto_window_id,
+                        ?window_id,
+                        ?size,
+                        scale_factor,
+                        is_x11,
+                        "created requested host window"
+                    );
                     self.inner.windows.insert(
                         window_id,
                         HostEventWindow {
@@ -438,6 +462,7 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
                     });
                 }
                 Err(err) => {
+                    error!(?auto_window_id, error = %err, "failed to create requested host window");
                     (self.callback)(HostEvent::WindowCreateFailed {
                         auto_window_id,
                         error: err.to_string(),
@@ -445,6 +470,7 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
                 }
             },
             HostWindowRequest::Close { window_id } => {
+                debug!(?window_id, "closing requested host window");
                 self.inner.windows.remove(&window_id);
                 (self.callback)(HostEvent::WindowClosed { window_id });
             }
@@ -454,12 +480,7 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
 
 impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoopApp<'_, F> {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
-        (self.callback)(HostEvent::Input {
-            window_id: self.inner.startup_window_id,
-            event: InputEvent::DeviceAdded {
-                device: HostVirtualDevice,
-            },
-        });
+        debug!("winit event loop resumed");
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, request: HostWindowRequest) {
@@ -472,6 +493,11 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        if self.is_startup_window(window_id) {
+            trace!(?window_id, "ignoring bootstrap host window event");
+            return;
+        }
+
         match event {
             WindowEvent::Resized(size) => {
                 let Some(window) = self.window(window_id) else {
@@ -479,6 +505,13 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
                 };
                 let scale_factor = window.scale_factor;
                 let (w, h): (i32, i32) = size.into();
+                debug!(
+                    ?window_id,
+                    width = w,
+                    height = h,
+                    scale_factor,
+                    "winit resize event"
+                );
                 (self.callback)(HostEvent::Resized {
                     window_id,
                     size: (w, h).into(),
@@ -495,6 +528,13 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
                 window.scale_factor = new_scale_factor;
                 let scale_factor = window.scale_factor;
                 let (w, h): (i32, i32) = window.window.inner_size().into();
+                debug!(
+                    ?window_id,
+                    width = w,
+                    height = h,
+                    scale_factor,
+                    "winit scale factor changed"
+                );
                 (self.callback)(HostEvent::Resized {
                     window_id,
                     size: (w, h).into(),
@@ -505,9 +545,11 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
                 (self.callback)(HostEvent::Redraw { window_id });
             }
             WindowEvent::CloseRequested => {
+                info!(?window_id, "winit close requested");
                 (self.callback)(HostEvent::CloseRequested { window_id });
             }
             WindowEvent::Focused(focused) => {
+                debug!(?window_id, focused, "winit focus changed");
                 (self.callback)(HostEvent::Focus { window_id, focused });
             }
             WindowEvent::KeyboardInput {
@@ -530,6 +572,7 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
                         state: key_state(event.state),
                     },
                 };
+                trace!(?window_id, "winit keyboard input");
                 (self.callback)(HostEvent::Input { window_id, event });
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -546,6 +589,7 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
                         global_position: position,
                     },
                 };
+                trace!(?window_id, ?position, "winit cursor moved");
                 (self.callback)(HostEvent::Input { window_id, event });
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -555,6 +599,7 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
                         delta,
                     },
                 };
+                trace!(?window_id, ?delta, "winit mouse wheel");
                 (self.callback)(HostEvent::Input { window_id, event });
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -569,6 +614,7 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
                         is_x11: window.is_x11,
                     },
                 };
+                trace!(?window_id, ?button, ?state, "winit mouse input");
                 (self.callback)(HostEvent::Input { window_id, event });
             }
             WindowEvent::DroppedFile(_)
@@ -613,6 +659,10 @@ impl EventSource for HostEventLoop {
         if self.pending_events.is_empty() {
             Ok(None)
         } else {
+            trace!(
+                count = self.pending_events.len(),
+                "dispatching pending host events"
+            );
             Ok(Some((Readiness::EMPTY, self.fake_token.unwrap())))
         }
     }
@@ -635,6 +685,7 @@ impl EventSource for HostEventLoop {
                 PostAction::Continue
             }
             smithay::reexports::winit::platform::pump_events::PumpStatus::Exit(_) => {
+                warn!("winit event loop requested removal");
                 PostAction::Remove
             }
         })

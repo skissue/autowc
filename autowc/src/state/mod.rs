@@ -33,6 +33,7 @@ use smithay::{
         socket::ListeningSocketSource,
     },
 };
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     host::HostWindowRequester,
@@ -97,6 +98,14 @@ impl AutoWC {
         protocol: Protocol,
     ) -> Self {
         let start_time = std::time::Instant::now();
+        debug!(
+            ?initial_virtual_size,
+            dynamic_resize,
+            stay_alive,
+            ?timing,
+            ?protocol,
+            "initializing compositor state"
+        );
 
         let dh = display.handle();
 
@@ -130,6 +139,7 @@ impl AutoWC {
 
         // Setup a wayland socket that will be used to accept clients
         let socket_name = Self::init_wayland_listener(display, event_loop);
+        info!(socket = ?socket_name, "listening for nested wayland clients");
 
         // Get the loop signal, used to stop the event loop
         let loop_signal = event_loop.get_signal();
@@ -196,6 +206,7 @@ impl AutoWC {
                 // Inside the callback, you should insert the client into the display.
                 //
                 // You may also associate some data with the client when inserting the client.
+                debug!("accepting nested wayland client");
                 state
                     .display_handle
                     .insert_client(client_stream, Arc::new(ClientState::default()))
@@ -326,6 +337,7 @@ impl AutoWC {
 
     pub fn map_new_toplevel(&mut self, window: Window) {
         let window_id = self.windows.create_window();
+        info!(?window_id, "new toplevel");
         self.create_output_for_window(window_id);
 
         self.configure_probe(&window);
@@ -363,16 +375,21 @@ impl AutoWC {
             AutoWindowState::WaitingProbeCommit => {
                 let preferred_size = self.preferred_toplevel_size(&window);
                 if let Some(requester) = &self.host_window_requester {
+                    debug!(?window_id, ?preferred_size, "requesting host window");
                     requester.create_window(window_id, preferred_size);
                     self.windows
                         .get_mut(window_id)
                         .expect("AutoWC window is missing")
                         .set_state(AutoWindowState::WaitingHostWindow);
                 } else {
-                    eprintln!("AutoWC cannot create host window: winit backend is not initialized");
+                    error!(
+                        ?window_id,
+                        "cannot create host window because winit backend is not initialized"
+                    );
                 }
             }
             AutoWindowState::WaitingFinalCommit => {
+                debug!(?window_id, "received final toplevel commit");
                 self.map_configured_window(window_id);
             }
             AutoWindowState::Mapped => {
@@ -383,6 +400,7 @@ impl AutoWC {
                     .find_overlay_by_surface(surface)
                     .is_some()
                 {
+                    trace!(?window_id, "recentering overlay after commit");
                     self.center_overlay(window_id, &window);
                 }
             }
@@ -411,6 +429,14 @@ impl AutoWC {
             .get_mut(window_id)
             .expect("AutoWC window is missing")
             .set_host_window(host_window_id, host_size, virtual_size);
+        info!(
+            ?window_id,
+            ?host_window_id,
+            ?host_size,
+            ?virtual_size,
+            output_scale,
+            "bound host window"
+        );
         self.update_window_output(window_id, host_size, virtual_size, output_scale);
 
         if self.preferred_toplevel_size(&window) == virtual_size {
@@ -435,8 +461,21 @@ impl AutoWC {
         output_scale: f64,
     ) {
         if host_size.w <= 0 || host_size.h <= 0 || virtual_size.w <= 0 || virtual_size.h <= 0 {
+            warn!(
+                ?window_id,
+                ?host_size,
+                ?virtual_size,
+                "ignoring invalid window resize"
+            );
             return;
         }
+        debug!(
+            ?window_id,
+            ?host_size,
+            ?virtual_size,
+            output_scale,
+            "resizing window"
+        );
         let auto_window = self
             .windows
             .get_mut(window_id)
@@ -461,6 +500,7 @@ impl AutoWC {
 
     pub fn remove_toplevel(&mut self, surface: &WlSurface) {
         let Some(window_id) = self.windows.find_id_by_surface(surface) else {
+            debug!("toplevel destroyed for unknown surface");
             self.maybe_exit_when_empty();
             return;
         };
@@ -471,6 +511,7 @@ impl AutoWC {
             .is_some_and(|window| window.toplevel().unwrap().wl_surface() == surface);
 
         if primary_matches {
+            info!(?window_id, "primary toplevel removed");
             if let Some(window) = self
                 .windows
                 .get_mut(window_id)
@@ -504,6 +545,7 @@ impl AutoWC {
             .expect("AutoWC window is missing")
             .remove_overlay_by_surface(surface)
         {
+            debug!(?window_id, "overlay toplevel removed");
             self.windows
                 .get_mut(window_id)
                 .expect("AutoWC window is missing")
@@ -532,13 +574,13 @@ impl AutoWC {
 
         match child.try_wait() {
             Ok(Some(status)) => {
-                eprintln!("AutoWC child exited with {status}");
+                info!(%status, "initial child exited");
                 self.child = None;
                 self.maybe_exit_when_empty();
             }
             Ok(None) => {}
             Err(err) => {
-                eprintln!("AutoWC failed to poll child process: {err}");
+                error!(error = %err, "failed to poll initial child process");
                 self.child = None;
                 self.maybe_exit_when_empty();
             }
@@ -550,13 +592,17 @@ impl AutoWC {
             return Err("missing launch command".into());
         };
 
+        info!(%program, arg_count = args.len(), "launching child from control command");
         let child = Command::new(program)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|err| format!("failed to launch {program}: {err}"))?;
+            .map_err(|err| {
+                error!(%program, error = %err, "failed to launch child from control command");
+                format!("failed to launch {program}: {err}")
+            })?;
         self.launched_children.push(child);
         self.reap_launched_children();
         Ok(())
@@ -564,7 +610,17 @@ impl AutoWC {
 
     fn reap_launched_children(&mut self) {
         self.launched_children
-            .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
+            .retain_mut(|child| match child.try_wait() {
+                Ok(Some(status)) => {
+                    info!(%status, "launched child exited");
+                    false
+                }
+                Ok(None) => true,
+                Err(err) => {
+                    error!(error = %err, "failed to poll launched child process");
+                    false
+                }
+            });
     }
 
     pub fn configure_probe(&self, window: &Window) {
@@ -641,11 +697,13 @@ impl AutoWC {
                 path
             }
         };
+        debug!(?window_id, path = %path.display(), "queued screenshot");
         self.pending_screenshots
             .push_back(ScreenshotRequest { window_id, path });
     }
 
     pub fn request_shutdown(&mut self) {
+        info!("shutdown requested");
         self.cleanup_autogenerated_screenshots();
         self.loop_signal.stop();
     }
@@ -756,6 +814,7 @@ impl AutoWC {
             }
             _ => window_id,
         });
+        trace!(?window_id, first_alive_window_id = ?self.first_alive_window_id, "recorded live window");
     }
 
     fn refresh_first_alive_window(&mut self) {
@@ -775,8 +834,14 @@ impl AutoWC {
 
     pub fn close_host_window(&mut self, host_window_id: HostWindowId) {
         let Some(window_id) = self.find_window_by_host_window(host_window_id) else {
+            warn!(?host_window_id, "close requested for unknown host window");
             return;
         };
+        info!(
+            ?window_id,
+            ?host_window_id,
+            "sending close to client toplevel"
+        );
         if let Some(window) = self
             .windows
             .get(window_id)
@@ -804,6 +869,7 @@ impl AutoWC {
             .get_mut(window_id)
             .expect("AutoWC window is missing")
             .set_state(AutoWindowState::Mapped);
+        info!(?window_id, "mapped toplevel");
         self.focus_window(window_id, Some(&window));
     }
 
@@ -840,9 +906,10 @@ fn cleanup_screenshot_paths(paths: impl IntoIterator<Item = PathBuf>) {
         match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => eprintln!(
-                "AutoWC failed to remove autogenerated screenshot {}: {err}",
-                path.display()
+            Err(err) => warn!(
+                path = %path.display(),
+                error = %err,
+                "failed to remove autogenerated screenshot"
             ),
         }
     }
@@ -879,11 +946,13 @@ pub struct ScreenshotRequest {
     pub path: PathBuf,
 }
 
+#[derive(Debug)]
 pub struct QueuedControlAction {
     pub window_id: AutoWindowId,
     pub kind: QueuedControlActionKind,
 }
 
+#[derive(Debug)]
 pub enum QueuedControlActionKind {
     Key { code: u32, state: KeyState },
     PointerMove { x: f64, y: f64 },
@@ -895,8 +964,13 @@ pub enum QueuedControlActionKind {
 }
 
 impl ClientData for ClientState {
-    fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+    fn initialized(&self, client_id: ClientId) {
+        debug!(?client_id, "nested wayland client initialized");
+    }
+
+    fn disconnected(&self, client_id: ClientId, reason: DisconnectReason) {
+        info!(?client_id, ?reason, "nested wayland client disconnected");
+    }
 }
 
 #[cfg(test)]

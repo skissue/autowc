@@ -25,6 +25,7 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
 use smithay::utils::{Logical, Size};
 pub use state::{AutoWC, TimingOptions};
+use tracing::{debug, info};
 
 const DEFAULT_INITIAL_WIDTH: i32 = 1280;
 const DEFAULT_INITIAL_HEIGHT: i32 = 720;
@@ -79,10 +80,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output_sizing = output_sizing_from_cli(&cli)?;
     let timing = timing_from_cli(&cli);
     let protocol = protocol_from_cli(&cli);
+    info!(
+        ?output_sizing,
+        ?timing,
+        ?protocol,
+        stay_alive = cli.stay_alive,
+        "starting autowc"
+    );
 
     let mut event_loop: EventLoop<AutoWC> = EventLoop::try_new()?;
+    debug!("created calloop event loop");
 
     let display: Display<AutoWC> = Display::new()?;
+    debug!("created wayland display");
 
     let mut state = AutoWC::new(
         &mut event_loop,
@@ -100,6 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Set WAYLAND_DISPLAY to our socket name, so child processes connect to AutoWC rather
     // than the host compositor
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
+    info!(socket = ?state.socket_name, "configured nested wayland display");
 
     state.child = Some(spawn_client(&cli.command)?);
     init_child_watcher(&mut event_loop)?;
@@ -107,9 +118,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     crate::stdin::init_stdin(&mut event_loop)?;
 
+    info!("entering autowc event loop");
     event_loop.run(None, &mut state, move |_| {
         // AutoWC is running
     })?;
+    info!("autowc event loop exited");
 
     Ok(())
 }
@@ -185,6 +198,7 @@ fn spawn_client(command: &[OsString]) -> Result<Child, Box<dyn std::error::Error
         return Err("missing launch command".into());
     };
 
+    info!(?program, arg_count = args.len(), "spawning initial client");
     Ok(Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -196,6 +210,7 @@ fn spawn_client(command: &[OsString]) -> Result<Child, Box<dyn std::error::Error
 fn init_child_watcher(
     event_loop: &mut EventLoop<AutoWC>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    debug!("installing child process watcher");
     event_loop.handle().insert_source(
         Timer::from_duration(Duration::from_millis(100)),
         |_, _, state| {
@@ -210,6 +225,7 @@ fn init_child_watcher(
 fn init_control_scheduler(
     event_loop: &mut EventLoop<AutoWC>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    debug!("installing control action scheduler");
     event_loop.handle().insert_source(
         Timer::from_duration(crate::input::CONTROL_QUEUE_POLL_INTERVAL),
         |_, _, state| {

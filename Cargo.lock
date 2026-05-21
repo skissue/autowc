@@ -182,6 +182,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smithay",
+ "tracing",
  "tracing-subscriber",
  "wayland-egl",
  "wl-clipboard-rs",

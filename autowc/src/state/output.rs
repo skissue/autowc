@@ -5,9 +5,15 @@ use smithay::{
 };
 
 use crate::{state::AutoWC, window::AutoWindowId};
+use tracing::{debug, trace};
 
 impl AutoWC {
     fn map_output_for_window(&mut self, window_id: AutoWindowId, output: &Output) {
+        debug!(
+            ?window_id,
+            output = output.name(),
+            "mapping output for window"
+        );
         self.windows
             .get_mut(window_id)
             .expect("AutoWC window is missing")
@@ -26,6 +32,11 @@ impl AutoWC {
     pub(super) fn create_output_for_window(&mut self, window_id: AutoWindowId) {
         let next_pending_output = self.create_output();
         let output = std::mem::replace(&mut self.pending_output, next_pending_output);
+        debug!(
+            ?window_id,
+            output = output.name(),
+            "assigning output to window"
+        );
         self.windows
             .get_mut(window_id)
             .expect("AutoWC window is missing")
@@ -56,6 +67,7 @@ impl AutoWC {
         } else {
             (virtual_size.to_physical(1), 1.0)
         };
+        debug!(?window_id, ?mode_size, scale, "updating window output");
         update_output_mode(&output, mode_size, scale);
     }
 
@@ -90,6 +102,11 @@ pub(super) fn create_output(
     *next_output_id += 1;
 
     let _global = output.create_global::<AutoWC>(display_handle);
+    debug!(
+        output = output.name(),
+        ?initial_virtual_size,
+        "created output"
+    );
     update_output_mode(&output, initial_virtual_size.to_physical(1), 1.0);
     output
 }
@@ -107,6 +124,12 @@ fn update_output_mode(output: &Output, size: Size<i32, Physical>, scale_factor: 
         Some((0, 0).into()),
     );
     output.set_preferred(mode);
+    trace!(
+        output = output.name(),
+        ?size,
+        scale_factor,
+        "updated output mode"
+    );
 }
 
 fn normalized_scale_factor(scale_factor: f64) -> f64 {

@@ -10,6 +10,7 @@ use smithay::{
     },
     utils::{Physical, Size},
 };
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     host::{self, HostEvent},
@@ -22,6 +23,10 @@ pub fn init_winit(
     event_loop: &mut EventLoop<AutoWC>,
     state: &mut AutoWC,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    debug!(
+        size = ?state.initial_virtual_size,
+        "initializing host winit backend"
+    );
     let window_attributes = WinitWindow::default_attributes()
         .with_inner_size(LogicalSize::new(
             state.initial_virtual_size.w as f64,
@@ -29,9 +34,9 @@ pub fn init_winit(
         ))
         .with_title("AutoWC Bootstrap")
         .with_visible(false);
-    let (mut backend, host_events, requester) =
-        host::init_from_attributes(window_attributes)?;
+    let (mut backend, host_events, requester) = host::init_from_attributes(window_attributes)?;
     state.set_host_window_requester(requester);
+    debug!("host window requester installed");
 
     let mut render_windows = RenderWindows::new();
 
@@ -71,9 +76,10 @@ fn handle_host_event(
             auto_window_id,
             error,
         } => {
-            eprintln!("AutoWC failed to create host window {auto_window_id:?}: {error}");
+            error!(?auto_window_id, %error, "failed to create host window");
         }
         HostEvent::WindowClosed { window_id } => {
+            info!(?window_id, "host window closed");
             backend.remove_window(window_id);
             render_windows.remove_host_window(window_id);
         }
@@ -83,31 +89,53 @@ fn handle_host_event(
             scale_factor,
             ..
         } => {
+            debug!(?window_id, ?size, scale_factor, "host window resized");
             render_windows.resize_host_window(state, window_id, size, scale_factor);
         }
         HostEvent::Input { window_id, event } => {
             if state.has_pending_control_actions() {
+                trace!(
+                    ?window_id,
+                    "ignoring host input while synthetic control actions are pending"
+                );
                 return;
             }
             if let Some(auto_window_id) = render_windows.auto_window_id(window_id) {
+                trace!(?window_id, ?auto_window_id, ?event, "processing host input");
                 state.process_input_event(auto_window_id, event);
+            } else {
+                warn!(?window_id, "received input for unknown host window");
             }
         }
         HostEvent::Redraw { window_id } => {
+            trace!(?window_id, "redrawing host window");
             render_windows.redraw_host_window(state, backend, window_id);
         }
         HostEvent::CloseRequested { window_id } => {
+            info!(?window_id, "host window close requested");
             state.close_host_window(window_id);
         }
         HostEvent::Focus { window_id, focused } => {
             if state.has_pending_control_actions() {
+                trace!(
+                    ?window_id,
+                    focused,
+                    "ignoring host focus while synthetic control actions are pending"
+                );
                 return;
             }
             let Some(auto_window_id) = render_windows.auto_window_id(window_id) else {
+                warn!(
+                    ?window_id,
+                    focused, "received focus event for unknown host window"
+                );
                 return;
             };
             if focused {
+                debug!(?window_id, ?auto_window_id, "host window focused");
                 state.focus_auto_window(auto_window_id);
+            } else {
+                trace!(?window_id, ?auto_window_id, "host window unfocused");
             }
         }
     }
@@ -124,16 +152,17 @@ fn handle_window_created(
     scale_factor: f64,
 ) {
     if let Err(err) = backend.add_window(window) {
-        eprintln!("AutoWC failed to initialize host window renderer: {err}");
+        error!(?auto_window_id, ?host_window_id, error = %err, "failed to initialize host window renderer");
         return;
     }
 
-    render_windows.add_host_window(
-        state,
-        host_window_id,
-        auto_window_id,
-        size,
+    info!(
+        ?auto_window_id,
+        ?host_window_id,
+        ?size,
         scale_factor,
+        "host window created"
     );
+    render_windows.add_host_window(state, host_window_id, auto_window_id, size, scale_factor);
     backend.window(host_window_id).request_redraw();
 }

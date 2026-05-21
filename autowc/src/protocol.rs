@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 
 use serde::Serialize;
+use tracing::{error, trace};
 
 use crate::control::{parse_control_command, parse_json_control_line, ControlCommand};
 
@@ -74,9 +75,15 @@ impl Protocol {
 }
 
 pub fn send(line: impl AsRef<str>) {
+    trace!(response = line.as_ref(), "sending protocol response");
     let mut stdout = io::stdout().lock();
-    let _ = writeln!(stdout, "{}", line.as_ref());
-    let _ = stdout.flush();
+    if let Err(err) = writeln!(stdout, "{}", line.as_ref()) {
+        error!(error = %err, "failed to write protocol response");
+        return;
+    }
+    if let Err(err) = stdout.flush() {
+        error!(error = %err, "failed to flush protocol response");
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

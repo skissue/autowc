@@ -15,6 +15,7 @@ use smithay::{
         shm::{ShmHandler, ShmState},
     },
 };
+use tracing::trace;
 
 impl CompositorHandler for AutoWC {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -26,6 +27,7 @@ impl CompositorHandler for AutoWC {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        trace!("wayland surface commit");
         on_commit_buffer_handler::<Self>(surface);
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();

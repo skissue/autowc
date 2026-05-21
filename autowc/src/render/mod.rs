@@ -19,6 +19,7 @@ use smithay::{
     reexports::winit::window::WindowId as HostWindowId,
     utils::{Buffer, Logical, Physical, Rectangle, Size, Transform},
 };
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{host, screenshot, window::AutoWindowId, AutoWC};
 
@@ -49,6 +50,13 @@ impl RenderWindow {
         scale_factor: f64,
     ) {
         let host = HostGeometry::new(size, scale_factor);
+        debug!(
+            ?auto_window_id,
+            ?size,
+            scale_factor,
+            normalized_scale_factor = host.scale_factor,
+            "resizing render host"
+        );
         self.host_size = host.size;
         self.host_scale_factor = host.scale_factor;
 
@@ -84,6 +92,14 @@ impl RenderWindows {
     ) {
         let host = HostGeometry::new(size, scale_factor);
         let virtual_size = host.virtual_size_for(state);
+        debug!(
+            ?host_window_id,
+            ?auto_window_id,
+            ?size,
+            scale_factor,
+            ?virtual_size,
+            "adding render host window"
+        );
         state.bind_host_window(
             auto_window_id,
             host_window_id,
@@ -92,6 +108,7 @@ impl RenderWindows {
             host.output_scale(state),
         );
         let Some(output) = state.output_for_window(auto_window_id) else {
+            warn!(?auto_window_id, "cannot add render window without output");
             return;
         };
         self.insert(
@@ -113,7 +130,14 @@ impl RenderWindows {
 
     pub(crate) fn remove_host_window(&mut self, host_window_id: HostWindowId) {
         if let Some(auto_window_id) = self.by_host_window.remove(&host_window_id) {
+            debug!(
+                ?host_window_id,
+                ?auto_window_id,
+                "removing render host window"
+            );
             self.by_auto_window.remove(&auto_window_id);
+        } else {
+            warn!(?host_window_id, "cannot remove unknown render host window");
         }
     }
 
@@ -128,9 +152,9 @@ impl RenderWindows {
         size: Size<i32, Physical>,
         scale_factor: f64,
     ) {
-        let Some((auto_window_id, render_window)) =
-            self.get_by_host_window_mut(host_window_id)
+        let Some((auto_window_id, render_window)) = self.get_by_host_window_mut(host_window_id)
         else {
+            warn!(?host_window_id, "cannot resize unknown render host window");
             return;
         };
         render_window.resize_host(state, auto_window_id, size, scale_factor);
@@ -144,9 +168,9 @@ impl RenderWindows {
     ) {
         let size = backend.window_size(host_window_id);
         let scale_factor = backend.scale_factor(host_window_id);
-        let Some((auto_window_id, render_window)) =
-            self.get_by_host_window_mut(host_window_id)
+        let Some((auto_window_id, render_window)) = self.get_by_host_window_mut(host_window_id)
         else {
+            warn!(?host_window_id, "cannot redraw unknown render host window");
             return;
         };
 
@@ -187,6 +211,12 @@ fn render_host_window(
     render_window: &mut RenderWindow,
     size: Size<i32, Physical>,
 ) {
+    trace!(
+        ?host_window_id,
+        ?auto_window_id,
+        ?size,
+        "rendering host window"
+    );
     let damage = Rectangle::from_size(size);
 
     {
@@ -205,6 +235,11 @@ fn render_host_window(
             .map(|framebuffer| framebuffer.texture.size() != virtual_buffer_size)
             .unwrap_or(true);
         if recreate_virtual_framebuffer {
+            debug!(
+                ?auto_window_id,
+                ?virtual_buffer_size,
+                "creating virtual framebuffer"
+            );
             render_window.virtual_framebuffer = Some(VirtualFramebuffer {
                 texture: renderer
                     .create_buffer(Fourcc::Abgr8888, virtual_buffer_size)
@@ -218,6 +253,7 @@ fn render_host_window(
         }
 
         let Some(space) = state.window_space(auto_window_id) else {
+            warn!(?auto_window_id, "cannot render window without space");
             return;
         };
         let render_elements =
@@ -321,6 +357,7 @@ fn write_pending_screenshots(
             continue;
         }
 
+        debug!(?auto_window_id, path = %request.path.display(), "writing screenshot");
         let result = renderer
             .copy_texture(
                 &virtual_framebuffer.texture,
@@ -339,10 +376,16 @@ fn write_pending_screenshots(
             });
 
         match result {
-            Ok(()) => state
-                .protocol
-                .send_screenshot(screenshot::display_path(&request.path)),
-            Err(err) => state.protocol.send_error(err),
+            Ok(()) => {
+                info!(?auto_window_id, path = %request.path.display(), "screenshot written");
+                state
+                    .protocol
+                    .send_screenshot(screenshot::display_path(&request.path));
+            }
+            Err(err) => {
+                error!(?auto_window_id, path = %request.path.display(), error = %err, "failed to write screenshot");
+                state.protocol.send_error(err);
+            }
         }
     }
 }
