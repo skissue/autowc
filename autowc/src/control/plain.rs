@@ -1,6 +1,6 @@
 use std::{ffi::OsString, path::PathBuf};
 
-use crate::keycodes::key_to_code;
+use crate::input::keyboard::key_to_code;
 
 use super::{
     ensure_no_extra, parse_button, parse_f64, parse_press_action, ControlCommand,

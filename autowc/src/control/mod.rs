@@ -2,7 +2,7 @@ use std::{ffi::OsString, path::PathBuf};
 
 use smithay::backend::input::{ButtonState, KeyState};
 
-use crate::keycodes::key_to_code;
+use crate::input::keyboard::key_to_code;
 
 mod json;
 mod plain;

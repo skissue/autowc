@@ -2,7 +2,7 @@ use std::{ffi::OsString, path::PathBuf};
 
 use serde::Deserialize;
 
-use crate::keycodes::key_to_code;
+use crate::input::keyboard::key_to_code;
 
 use super::{parse_button, ControlCommand, ControlCommandVariant, PressAction, BTN_LEFT};
 

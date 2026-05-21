@@ -3,7 +3,6 @@
 mod control;
 mod host;
 mod input;
-mod keycodes;
 mod protocol;
 mod render;
 mod screenshot;

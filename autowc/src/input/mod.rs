@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::state::AutoWC;
 
 mod host;
+pub mod keyboard;
 mod synthetic;
 
 pub const CONTROL_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
