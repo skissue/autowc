@@ -102,8 +102,6 @@ fn handle_host_event(
             };
             if focused {
                 state.focus_auto_window(auto_window_id);
-            } else {
-                state.blur_auto_window(auto_window_id);
             }
         }
     }
