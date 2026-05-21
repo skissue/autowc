@@ -197,7 +197,9 @@ fn parse_sleep<'a>(
     })))
 }
 
-fn parse_launch<'a>(parts: impl Iterator<Item = &'a str>) -> Result<Option<ControlCommand>, String> {
+fn parse_launch<'a>(
+    parts: impl Iterator<Item = &'a str>,
+) -> Result<Option<ControlCommand>, String> {
     let command = parts.map(ToString::to_string).collect::<Vec<_>>();
     if command.is_empty() {
         return Err("usage: launch <command> [args...]".into());

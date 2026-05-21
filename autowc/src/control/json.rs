@@ -4,9 +4,7 @@ use serde::Deserialize;
 
 use crate::keycodes::key_to_code;
 
-use super::{
-    parse_button, ControlCommand, ControlCommandVariant, PressAction, BTN_LEFT,
-};
+use super::{parse_button, ControlCommand, ControlCommandVariant, PressAction, BTN_LEFT};
 
 pub fn parse_json_control_line(line: &str) -> Result<Option<ControlCommand>, String> {
     let line = line.trim();
