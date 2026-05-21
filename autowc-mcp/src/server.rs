@@ -35,10 +35,6 @@ When more than one window is open, call `list` and then pass the desired window 
 
 Mouse coordinates are virtual-display pixels with the origin at the top-left of the target AutoWC window. Keyboard commands use W3C KeyboardEvent.code physical key names, such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5.
 
-The run tool returns a final screenshot by default so agents can observe the result of their commands. When `run` has a `window` target, the returned screenshot uses the same target. Set `return_screenshot` to false only when intentionally running without immediate visual feedback or if your commands intend to close the targeted window.
-
-The close tool only sends a close request to the client toplevel; the application may still decide whether and when to exit.
-
 If AutoWC exits, later tool calls return ok=false with the captured stderr log.";
 
 #[derive(Debug, Clone)]
@@ -100,7 +96,7 @@ impl AutoWcMcpServer {
 
     #[tool(
         name = "run",
-        description = "Send a batch of automation commands to the running AutoWC compositor session."
+        description = "Send a batch of automation commands to the running AutoWC compositor session. Returns a final screenshot by default so agents can observe the result of their commands. When run has a window target, the returned screenshot uses the same target."
     )]
     pub async fn run(
         &self,
@@ -165,7 +161,7 @@ impl AutoWcMcpServer {
 
     #[tool(
         name = "close",
-        description = "Request that an AutoWC window's client toplevel close."
+        description = "Request that an AutoWC window's client toplevel close. This only sends a close request; the application may still decide whether and when to exit."
     )]
     pub async fn close(
         &self,
@@ -198,7 +194,7 @@ pub struct RunParams {
     )]
     pub window: Option<u64>,
     #[schemars(
-        description = "Whether to return an inline screenshot after the batch completes. Defaults to true."
+        description = "Whether to return an inline screenshot after the batch completes. Defaults to true. Set to false only when intentionally running without immediate visual feedback or if your commands intend to close the targeted window."
     )]
     pub return_screenshot: Option<bool>,
     #[schemars(
@@ -346,9 +342,9 @@ mod tests {
         assert!(SERVER_INSTRUCTIONS.contains("one AutoWC compositor session"));
         assert!(SERVER_INSTRUCTIONS.contains("starts AutoWC automatically"));
         assert!(SERVER_INSTRUCTIONS.contains("call `list`"));
-        assert!(SERVER_INSTRUCTIONS.contains("return_screenshot"));
-        assert!(SERVER_INSTRUCTIONS.contains("The close tool only sends a close request"));
         assert!(SERVER_INSTRUCTIONS.contains("W3C KeyboardEvent.code"));
+        assert!(!SERVER_INSTRUCTIONS.contains("return_screenshot"));
+        assert!(!SERVER_INSTRUCTIONS.contains("The close tool only sends a close request"));
         assert!(!SERVER_INSTRUCTIONS.contains("close stops"));
         assert!(!SERVER_INSTRUCTIONS.contains("KEY_*"));
         assert!(!SERVER_INSTRUCTIONS.contains("newline characters"));
@@ -374,6 +370,8 @@ mod tests {
         assert!(schema.contains("key, chord, text"));
         assert!(schema.contains("Optional AutoWC window id"));
         assert!(schema.contains("Defaults to true"));
+        assert!(schema.contains("without immediate visual feedback"));
+        assert!(schema.contains("intend to close the targeted window"));
         assert!(schema.contains("Defaults to 500"));
     }
 
