@@ -770,6 +770,7 @@ impl AutoWC {
 
     pub fn window_info(&self, window_id: AutoWindowId) -> Option<WindowInfo> {
         let window = self.windows.get(window_id)?.primary_window()?;
+        let size = self.window_virtual_size(window_id);
         let surface = window.toplevel().unwrap().wl_surface();
         let title = with_states(surface, |states| {
             states
@@ -781,6 +782,8 @@ impl AutoWC {
         Some(WindowInfo {
             id: window_id.raw(),
             title,
+            width: size.w,
+            height: size.h,
         })
     }
 

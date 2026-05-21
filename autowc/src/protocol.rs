@@ -90,6 +90,8 @@ pub fn send(line: impl AsRef<str>) {
 pub struct WindowInfo {
     pub id: u64,
     pub title: String,
+    pub width: i32,
+    pub height: i32,
 }
 
 #[derive(Serialize)]
@@ -133,10 +135,14 @@ mod tests {
                 WindowInfo {
                     id: 2,
                     title: "GTK Demo".to_string(),
+                    width: 800,
+                    height: 600,
                 },
                 WindowInfo {
                     id: 3,
                     title: "Dialog".to_string(),
+                    width: 640,
+                    height: 480,
                 },
             ]),
             "2 \"GTK Demo\" 3 \"Dialog\""
@@ -163,8 +169,10 @@ mod tests {
             Protocol::Json.format_window_list(&[WindowInfo {
                 id: 2,
                 title: "GTK Demo".to_string(),
+                width: 800,
+                height: 600,
             }]),
-            r#"{"ok":true,"windows":[{"id":2,"title":"GTK Demo"}]}"#
+            r#"{"ok":true,"windows":[{"id":2,"title":"GTK Demo","width":800,"height":600}]}"#
         );
     }
 }
