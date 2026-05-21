@@ -11,7 +11,6 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
     process::{Child, ChildStderr, ChildStdout, Command},
     sync::Mutex,
-    time::Duration,
 };
 
 use crate::command::{launch_line, list_line, screenshot_line, AutomationCommand};
@@ -58,7 +57,9 @@ pub struct RunOutcome {
 #[derive(Debug)]
 pub struct RunError {
     pub error: SessionError,
+    pub stage: RunErrorStage,
     pub commands_executed: usize,
+    pub failed_command_index: Option<usize>,
     pub screenshot: Option<Screenshot>,
 }
 
@@ -66,10 +67,21 @@ impl RunError {
     fn new(error: SessionError) -> Self {
         Self {
             error,
+            stage: RunErrorStage::Session,
             commands_executed: 0,
+            failed_command_index: None,
             screenshot: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunErrorStage {
+    Session,
+    Prepare,
+    Command,
+    Screenshot,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,7 +214,9 @@ impl Session {
     async fn launch(&mut self, command: &[String]) -> Result<(), SessionError> {
         self.ensure_running().await?;
         let line = launch_line(command).map_err(SessionError::new)?;
-        self.write_command_and_expect_ok(&line).await
+        self.execute_plan([PlannedCommand::expect_ok(line)])
+            .await
+            .map(|_| ())
     }
 
     async fn run(
@@ -215,76 +229,87 @@ impl Session {
         self.ensure_running().await.map_err(RunError::new)?;
         let mut commands_executed = 0;
 
-        for command in commands {
+        for (index, command) in commands.iter().enumerate() {
             let line = match command.to_autowc_line(window).map_err(SessionError::new) {
                 Ok(line) => line,
                 Err(error) => {
                     return Err(self
-                        .run_error(commands_executed, error, window, return_screenshot)
+                        .run_error(
+                            commands_executed,
+                            Some(index),
+                            RunErrorStage::Prepare,
+                            error,
+                            window,
+                            return_screenshot,
+                            screenshot_delay_ms,
+                        )
                         .await)
                 }
             };
 
-            if let Err(error) = self.write_command_and_expect_ok(&line).await {
+            if let Err(error) = self.execute_plan([PlannedCommand::expect_ok(line)]).await {
                 return Err(self
-                    .run_error(commands_executed, error, window, return_screenshot)
+                    .run_error(
+                        commands_executed,
+                        Some(index),
+                        RunErrorStage::Command,
+                        error,
+                        window,
+                        return_screenshot,
+                        screenshot_delay_ms,
+                    )
                     .await);
             }
 
             commands_executed += 1;
         }
 
-        if screenshot_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(screenshot_delay_ms)).await;
-        }
-
-        // Use a screenshot as a protocol sync point even when the caller does
-        // not want the image back; otherwise command errors could remain unread.
-        let screenshot = self
-            .screenshot(None, window, return_screenshot)
-            .await
-            .map_err(|error| RunError {
-                error,
-                commands_executed,
-                screenshot: None,
-            })?;
+        let screenshot = if return_screenshot {
+            Some(
+                self.delayed_screenshot(None, window, true, screenshot_delay_ms)
+                    .await
+                    .map_err(|error| RunError {
+                        error,
+                        stage: RunErrorStage::Screenshot,
+                        commands_executed,
+                        failed_command_index: None,
+                        screenshot: None,
+                    })?,
+            )
+        } else {
+            None
+        };
 
         Ok(RunOutcome {
             commands_executed,
-            screenshot: return_screenshot.then_some(screenshot),
+            screenshot,
         })
     }
 
     async fn run_error(
         &mut self,
         commands_executed: usize,
+        failed_command_index: Option<usize>,
+        stage: RunErrorStage,
         error: SessionError,
         window: Option<u64>,
         return_screenshot: bool,
+        screenshot_delay_ms: u64,
     ) -> RunError {
         let screenshot = if return_screenshot {
-            self.screenshot(None, window, true).await.ok()
+            self.delayed_screenshot(None, window, true, screenshot_delay_ms)
+                .await
+                .ok()
         } else {
             None
         };
 
         RunError {
             error,
+            stage,
             commands_executed,
+            failed_command_index,
             screenshot,
-        }
-    }
-
-    async fn write_command_and_expect_ok(&mut self, line: &str) -> Result<(), SessionError> {
-        self.write_line(line).await?;
-        match self.read_response().await? {
-            AutowcResponse::Ok => Ok(()),
-            AutowcResponse::Screenshot { .. } => Err(SessionError::new(
-                "unexpected screenshot response while awaiting ok",
-            )),
-            AutowcResponse::WindowList { .. } => Err(SessionError::new(
-                "unexpected window list response while awaiting ok",
-            )),
         }
     }
 
@@ -295,48 +320,50 @@ impl Session {
         include_data: bool,
     ) -> Result<Screenshot, SessionError> {
         self.ensure_running().await?;
-        let line = screenshot_line(path, window).map_err(SessionError::new)?;
-        self.write_line(&line).await?;
+        self.delayed_screenshot(path, window, include_data, 0).await
+    }
 
-        loop {
-            match self.read_response().await? {
-                AutowcResponse::Ok => continue,
-                AutowcResponse::WindowList { .. } => {
-                    return Err(SessionError::new(
-                        "unexpected window list response while awaiting screenshot",
-                    ));
-                }
-                AutowcResponse::Screenshot { path } => {
-                    let data_base64 = if include_data {
-                        STANDARD.encode(fs::read(&path).await.map_err(|err| {
-                            SessionError::new(format!("failed reading screenshot: {err}"))
-                        })?)
-                    } else {
-                        let _ = fs::remove_file(&path).await;
-                        String::new()
-                    };
-                    return Ok(Screenshot {
-                        path,
-                        mime_type: "image/png",
-                        data_base64,
-                    });
-                }
-            }
+    async fn delayed_screenshot(
+        &mut self,
+        path: Option<&Path>,
+        window: Option<u64>,
+        include_data: bool,
+        delay_ms: u64,
+    ) -> Result<Screenshot, SessionError> {
+        let mut plan = screenshot_plan(path, window, include_data, delay_ms)?;
+        let observed = self.execute_plan(plan.drain(..)).await?;
+        match observed.into_iter().last() {
+            Some(ObservedResponse::Screenshot(screenshot)) => Ok(screenshot),
+            _ => Err(SessionError::new(
+                "internal error: screenshot plan did not return a screenshot",
+            )),
         }
     }
 
     async fn list(&mut self) -> Result<Vec<WindowInfo>, SessionError> {
         self.ensure_running().await?;
-        self.write_line(&list_line()).await?;
-        match self.read_response().await? {
-            AutowcResponse::WindowList { windows } => Ok(windows),
-            AutowcResponse::Ok => Err(SessionError::new(
-                "unexpected ok response while awaiting window list",
-            )),
-            AutowcResponse::Screenshot { .. } => Err(SessionError::new(
-                "unexpected screenshot response while awaiting window list",
+        let observed = self
+            .execute_plan([PlannedCommand::expect_window_list(list_line())])
+            .await?;
+        match observed.into_iter().next() {
+            Some(ObservedResponse::WindowList(windows)) => Ok(windows),
+            _ => Err(SessionError::new(
+                "internal error: list plan did not return a window list",
             )),
         }
+    }
+
+    async fn execute_plan(
+        &mut self,
+        plan: impl IntoIterator<Item = PlannedCommand>,
+    ) -> Result<Vec<ObservedResponse>, SessionError> {
+        let mut observed = Vec::new();
+        for command in plan {
+            self.write_line(&command.line).await?;
+            let response = self.read_response().await?;
+            observed.push(observe_response(response, command.expected).await?);
+        }
+        Ok(observed)
     }
 
     async fn read_response(&mut self) -> Result<AutowcResponse, SessionError> {
@@ -521,8 +548,117 @@ impl SharedStderr {
 #[derive(Debug)]
 enum AutowcResponse {
     Ok,
+    Error(String),
     Screenshot { path: PathBuf },
     WindowList { windows: Vec<WindowInfo> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedResponse {
+    Ok,
+    Screenshot { include_data: bool },
+    WindowList,
+}
+
+#[derive(Debug)]
+struct PlannedCommand {
+    line: String,
+    expected: ExpectedResponse,
+}
+
+impl PlannedCommand {
+    fn expect_ok(line: String) -> Self {
+        Self {
+            line,
+            expected: ExpectedResponse::Ok,
+        }
+    }
+
+    fn expect_screenshot(line: String, include_data: bool) -> Self {
+        Self {
+            line,
+            expected: ExpectedResponse::Screenshot { include_data },
+        }
+    }
+
+    fn expect_window_list(line: String) -> Self {
+        Self {
+            line,
+            expected: ExpectedResponse::WindowList,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ObservedResponse {
+    Ok,
+    Screenshot(Screenshot),
+    WindowList(Vec<WindowInfo>),
+}
+
+fn screenshot_plan(
+    path: Option<&Path>,
+    window: Option<u64>,
+    include_data: bool,
+    delay_ms: u64,
+) -> Result<Vec<PlannedCommand>, SessionError> {
+    let mut plan = Vec::new();
+    if delay_ms > 0 {
+        let line = AutomationCommand::Sleep { ms: delay_ms }
+            .to_autowc_line(window)
+            .map_err(SessionError::new)?;
+        plan.push(PlannedCommand::expect_ok(line));
+    }
+
+    let line = screenshot_line(path, window).map_err(SessionError::new)?;
+    plan.push(PlannedCommand::expect_screenshot(line, include_data));
+    Ok(plan)
+}
+
+async fn observe_response(
+    response: AutowcResponse,
+    expected: ExpectedResponse,
+) -> Result<ObservedResponse, SessionError> {
+    match (response, expected) {
+        (AutowcResponse::Error(error), _) => Err(SessionError::new(error)),
+        (AutowcResponse::Ok, ExpectedResponse::Ok) => Ok(ObservedResponse::Ok),
+        (AutowcResponse::WindowList { windows }, ExpectedResponse::WindowList) => {
+            Ok(ObservedResponse::WindowList(windows))
+        }
+        (AutowcResponse::Screenshot { path }, ExpectedResponse::Screenshot { include_data }) => {
+            let data_base64 = if include_data {
+                STANDARD.encode(fs::read(&path).await.map_err(|err| {
+                    SessionError::new(format!("failed reading screenshot: {err}"))
+                })?)
+            } else {
+                let _ = fs::remove_file(&path).await;
+                String::new()
+            };
+            Ok(ObservedResponse::Screenshot(Screenshot {
+                path,
+                mime_type: "image/png",
+                data_base64,
+            }))
+        }
+        (AutowcResponse::Ok, ExpectedResponse::Screenshot { .. }) => Err(SessionError::new(
+            "unexpected ok response while awaiting screenshot",
+        )),
+        (AutowcResponse::Ok, ExpectedResponse::WindowList) => Err(SessionError::new(
+            "unexpected ok response while awaiting window list",
+        )),
+        (AutowcResponse::Screenshot { .. }, ExpectedResponse::Ok) => Err(SessionError::new(
+            "unexpected screenshot response while awaiting ok",
+        )),
+        (AutowcResponse::Screenshot { .. }, ExpectedResponse::WindowList) => Err(
+            SessionError::new("unexpected screenshot response while awaiting window list"),
+        ),
+        (AutowcResponse::WindowList { .. }, ExpectedResponse::Ok) => Err(SessionError::new(
+            "unexpected window list response while awaiting ok",
+        )),
+        (AutowcResponse::WindowList { .. }, ExpectedResponse::Screenshot { .. }) => Err(
+            SessionError::new("unexpected window list response while awaiting screenshot"),
+        ),
+    }
 }
 
 fn parse_response(line: &str) -> Result<AutowcResponse, String> {
@@ -530,10 +666,12 @@ fn parse_response(line: &str) -> Result<AutowcResponse, String> {
         serde_json::from_str(line).map_err(|err| format!("invalid AutoWC JSON response: {err}"))?;
 
     if let Some(error) = response.error {
-        return Err(error);
+        return Ok(AutowcResponse::Error(error));
     }
     if !response.ok {
-        return Err("AutoWC returned ok=false without an error message".into());
+        return Ok(AutowcResponse::Error(
+            "AutoWC returned ok=false without an error message".into(),
+        ));
     }
 
     if let Some(windows) = response.windows {
@@ -575,6 +713,7 @@ mod tests {
             parse_response(r#"{"ok":true,"type":"screenshot","path":"/tmp/autowc.png"}"#).unwrap();
         match response {
             AutowcResponse::Ok => panic!("expected screenshot response"),
+            AutowcResponse::Error(err) => panic!("expected screenshot response, got {err}"),
             AutowcResponse::Screenshot { path } => {
                 assert_eq!(path, PathBuf::from("/tmp/autowc.png"));
             }
@@ -592,9 +731,64 @@ mod tests {
 
     #[test]
     fn parses_error_response() {
+        match parse_response(r#"{"ok":false,"error":"unsupported key"}"#).unwrap() {
+            AutowcResponse::Error(err) => assert_eq!(err, "unsupported key"),
+            other => panic!("expected error response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plans_screenshot_without_hidden_sync_when_no_delay() {
+        let plan = screenshot_plan(None, Some(4), true, 0).unwrap();
+
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].line, r#"{"type":"screenshot","window":4}"#);
         assert_eq!(
-            parse_response(r#"{"ok":false,"error":"unsupported key"}"#).unwrap_err(),
-            "unsupported key"
+            plan[0].expected,
+            ExpectedResponse::Screenshot { include_data: true }
+        );
+    }
+
+    #[test]
+    fn plans_hidden_sleep_before_delayed_screenshot() {
+        let plan = screenshot_plan(None, Some(4), true, 250).unwrap();
+
+        assert_eq!(plan.len(), 2);
+        assert_eq!(plan[0].line, r#"{"ms":250,"type":"sleep","window":4}"#);
+        assert_eq!(plan[0].expected, ExpectedResponse::Ok);
+        assert_eq!(plan[1].line, r#"{"type":"screenshot","window":4}"#);
+        assert_eq!(
+            plan[1].expected,
+            ExpectedResponse::Screenshot { include_data: true }
+        );
+    }
+
+    #[tokio::test]
+    async fn observes_autowc_error_as_session_error() {
+        let err = observe_response(
+            AutowcResponse::Error("unknown window: 9".into()),
+            ExpectedResponse::Ok,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.message, "unknown window: 9");
+    }
+
+    #[tokio::test]
+    async fn rejects_unexpected_ok_for_screenshot() {
+        let err = observe_response(
+            AutowcResponse::Ok,
+            ExpectedResponse::Screenshot {
+                include_data: false,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            err.message,
+            "unexpected ok response while awaiting screenshot"
         );
     }
 

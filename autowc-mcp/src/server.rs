@@ -255,6 +255,8 @@ fn run_error_result(err: RunError) -> CallToolResult {
     result.structured_content = Some(json!({
         "ok": false,
         "error": err.error.message,
+        "error_stage": err.stage,
+        "failed_command_index": err.failed_command_index,
         "exit_status": err.error.exit_status,
         "stderr": err.error.stderr,
         "commands_executed": err.commands_executed,
@@ -379,7 +381,9 @@ mod tests {
                 exit_status: None,
                 stderr: String::new(),
             },
+            stage: crate::session::RunErrorStage::Command,
             commands_executed: 2,
+            failed_command_index: Some(2),
             screenshot: Some(Screenshot {
                 path: PathBuf::from("/tmp/image.png"),
                 mime_type: "image/png",
@@ -392,6 +396,8 @@ mod tests {
         assert!(result.content[1].as_image().is_some());
         let structured = result.structured_content.unwrap();
         assert_eq!(structured["commands_executed"], 2);
+        assert_eq!(structured["error_stage"], "command");
+        assert_eq!(structured["failed_command_index"], 2);
         assert_eq!(structured["error"], "unknown key: CTRL");
         assert_eq!(structured["screenshot"]["mime_type"], "image/png");
     }
