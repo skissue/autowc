@@ -37,6 +37,11 @@ impl AutoWC {
             self.complete_control_response(response, ControlResponse::WindowList { windows });
             return;
         }
+        if command.variant == ControlCommandVariant::Quit {
+            self.request_shutdown();
+            self.complete_control_response(response, ControlResponse::Ok);
+            return;
+        }
 
         let window_id = match command.window {
             Some(window) => {
@@ -75,7 +80,6 @@ impl AutoWC {
 
         let responds_with_screenshot =
             matches!(&command.variant, ControlCommandVariant::Screenshot { .. });
-        let responds_from_action = matches!(&command.variant, ControlCommandVariant::Quit);
 
         match command.variant {
             ControlCommandVariant::Key { code, action } => {
@@ -229,12 +233,10 @@ impl AutoWC {
             }
             ControlCommandVariant::Launch { .. } => unreachable!("launch is handled immediately"),
             ControlCommandVariant::List => unreachable!("list is handled by the protocol layer"),
-            ControlCommandVariant::Quit => {
-                self.queue_control_action(window_id, response, QueuedControlActionKind::Quit);
-            }
+            ControlCommandVariant::Quit => unreachable!("quit is handled immediately"),
         }
 
-        if !responds_with_screenshot && !responds_from_action {
+        if !responds_with_screenshot {
             self.queue_control_action(
                 window_id,
                 response,
@@ -296,11 +298,6 @@ impl AutoWC {
                         self.next_control_action_at = Some(Instant::now() + delay_after);
                         return;
                     }
-                }
-                QueuedControlActionKind::Quit => {
-                    self.request_shutdown();
-                    self.complete_control_response(action.response, ControlResponse::Ok);
-                    self.flush_control_responses();
                 }
                 QueuedControlActionKind::Delay(duration) => {
                     self.next_control_action_at = Some(Instant::now() + duration);

@@ -1167,7 +1167,6 @@ pub enum QueuedControlActionKind {
         path: Option<PathBuf>,
         delay_after: Duration,
     },
-    Quit,
     Delay(Duration),
     Respond {
         response: ControlResponse,
