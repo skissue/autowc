@@ -103,9 +103,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Open a Wayland/X11 window for our nested compositor
     crate::winit::init_winit(&mut event_loop, &mut state)?;
 
-    // Set WAYLAND_DISPLAY to our socket name, so child processes connect to AutoWC rather
-    // than the host compositor
-    std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
     info!(socket = ?state.socket_name, "configured nested wayland display");
 
     state

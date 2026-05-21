@@ -59,7 +59,6 @@ pub struct AutoWC {
     pub launched_children: Vec<Child>,
     pub clipboard_sync_threads: Vec<JoinHandle<()>>,
     pub(crate) pending_clipboard_sync: Option<clipboard::PendingClipboardSync>,
-    pub host_wayland_display: Option<OsString>,
     pub stay_alive: bool,
     pub pending_screenshots: VecDeque<ScreenshotRequest>,
     pub control_queue: VecDeque<QueuedControlAction>,
@@ -160,7 +159,6 @@ impl AutoWC {
             launched_children: Vec::new(),
             clipboard_sync_threads: Vec::new(),
             pending_clipboard_sync: None,
-            host_wayland_display: std::env::var_os("WAYLAND_DISPLAY"),
             stay_alive,
             pending_screenshots: VecDeque::new(),
             control_queue: VecDeque::new(),
@@ -576,8 +574,10 @@ impl AutoWC {
 
         let program_name = program.to_string_lossy();
         info!(program = %program_name, arg_count = args.len(), "launching child process");
-        let child = Command::new(program)
+        let mut command = Command::new(program);
+        let child = command
             .args(args)
+            .env("WAYLAND_DISPLAY", &self.socket_name)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

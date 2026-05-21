@@ -1,6 +1,4 @@
-use std::{
-    ffi::OsString, io::Read, os::fd::OwnedFd, os::unix::net::UnixStream, sync::Mutex, thread,
-};
+use std::{io::Read, os::fd::OwnedFd, os::unix::net::UnixStream, thread};
 
 use smithay::{
     input::Seat,
@@ -15,8 +13,6 @@ use wl_clipboard_rs::copy::{
 };
 
 use super::AutoWC;
-
-static WAYLAND_DISPLAY_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 pub(crate) struct PendingClipboardSync {
     seat: Seat<AutoWC>,
@@ -86,7 +82,6 @@ impl AutoWC {
         debug!(%mime_type, "requesting nested clipboard data");
         request_data_device_client_selection(&seat, mime_type.clone(), fd)?;
 
-        let host_wayland_display = self.host_wayland_display.clone();
         let thread = thread::spawn(move || {
             let mut bytes = Vec::new();
             if let Err(err) = read_end.read_to_end(&mut bytes) {
@@ -95,7 +90,7 @@ impl AutoWC {
             }
 
             debug!(byte_count = bytes.len(), %mime_type, "copying clipboard data to host");
-            if let Err(err) = copy_bytes_to_host_clipboard(host_wayland_display, mime_type, bytes) {
+            if let Err(err) = copy_bytes_to_host_clipboard(mime_type, bytes) {
                 error!(error = %err, "failed to copy clipboard data to host");
             }
         });
@@ -105,13 +100,9 @@ impl AutoWC {
     }
 
     fn clear_host_clipboard(&mut self) {
-        let host_wayland_display = self.host_wayland_display.clone();
         let thread = thread::spawn(move || {
             debug!("clearing host clipboard");
-            let result = with_host_wayland_display(host_wayland_display, || {
-                clear(ClipboardType::Regular, HostSeat::All)
-            });
-            if let Err(err) = result {
+            if let Err(err) = clear(ClipboardType::Regular, HostSeat::All) {
                 error!(error = %err, "failed to clear host clipboard");
             }
         });
@@ -121,40 +112,15 @@ impl AutoWC {
 }
 
 fn copy_bytes_to_host_clipboard(
-    host_wayland_display: Option<OsString>,
     mime_type: String,
     bytes: Vec<u8>,
 ) -> Result<(), wl_clipboard_rs::copy::Error> {
-    with_host_wayland_display(host_wayland_display, || {
-        let mut options = HostClipboardOptions::new();
-        options.clipboard(ClipboardType::Regular);
-        options.copy(
-            HostClipboardSource::Bytes(bytes.into_boxed_slice()),
-            HostMimeType::Specific(mime_type),
-        )
-    })
-}
-
-fn with_host_wayland_display<T>(
-    host_wayland_display: Option<OsString>,
-    f: impl FnOnce() -> T,
-) -> T {
-    let _guard = WAYLAND_DISPLAY_ENV_LOCK.lock().unwrap();
-    let previous = std::env::var_os("WAYLAND_DISPLAY");
-
-    match host_wayland_display {
-        Some(display) => std::env::set_var("WAYLAND_DISPLAY", display),
-        None => std::env::remove_var("WAYLAND_DISPLAY"),
-    }
-
-    let result = f();
-
-    match previous {
-        Some(display) => std::env::set_var("WAYLAND_DISPLAY", display),
-        None => std::env::remove_var("WAYLAND_DISPLAY"),
-    }
-
-    result
+    let mut options = HostClipboardOptions::new();
+    options.clipboard(ClipboardType::Regular);
+    options.copy(
+        HostClipboardSource::Bytes(bytes.into_boxed_slice()),
+        HostMimeType::Specific(mime_type),
+    )
 }
 
 fn preferred_clipboard_mime_type(mime_types: &[String]) -> Option<String> {
@@ -186,23 +152,6 @@ mod tests {
         assert_eq!(
             preferred_clipboard_mime_type(&mime_types),
             Some("image/png".into())
-        );
-    }
-
-    #[test]
-    fn restores_wayland_display_after_host_clipboard_call() {
-        std::env::set_var("WAYLAND_DISPLAY", "nested-display");
-
-        with_host_wayland_display(Some("host-display".into()), || {
-            assert_eq!(
-                std::env::var_os("WAYLAND_DISPLAY"),
-                Some(OsString::from("host-display"))
-            );
-        });
-
-        assert_eq!(
-            std::env::var_os("WAYLAND_DISPLAY"),
-            Some(OsString::from("nested-display"))
         );
     }
 }
