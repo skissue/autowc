@@ -1159,10 +1159,22 @@ pub struct QueuedControlAction {
 
 #[derive(Debug)]
 pub enum QueuedControlActionKind {
-    Key { code: u32, state: KeyState },
-    PointerMove { x: f64, y: f64 },
-    PointerButton { button: u32, state: ButtonState },
-    Scroll { dx: f64, dy: f64 },
+    Key {
+        code: u32,
+        state: KeyState,
+    },
+    PointerMove {
+        x: f64,
+        y: f64,
+    },
+    PointerButton {
+        button: u32,
+        state: ButtonState,
+    },
+    Scroll {
+        dx: f64,
+        dy: f64,
+    },
     Screenshot {
         path: Option<PathBuf>,
         delay_after: Duration,
