@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
     process::Child,
     sync::Arc,
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -39,6 +40,7 @@ use crate::{
     window::{AutoWindowId, AutoWindowState, WindowRegistry},
 };
 
+mod clipboard;
 mod output;
 
 pub struct AutoWC {
@@ -54,6 +56,9 @@ pub struct AutoWC {
     pub focused_window_id: Option<AutoWindowId>,
     pub host_window_requester: Option<HostWindowRequester>,
     pub child: Option<Child>,
+    pub clipboard_sync_threads: Vec<JoinHandle<()>>,
+    pub(crate) pending_clipboard_sync: Option<clipboard::PendingClipboardSync>,
+    pub host_wayland_display: Option<OsString>,
     pub stay_alive: bool,
     pub pending_screenshots: VecDeque<ScreenshotRequest>,
     pub control_queue: VecDeque<QueuedControlAction>,
@@ -143,6 +148,9 @@ impl AutoWC {
             focused_window_id: None,
             host_window_requester: None,
             child: None,
+            clipboard_sync_threads: Vec::new(),
+            pending_clipboard_sync: None,
+            host_wayland_display: std::env::var_os("WAYLAND_DISPLAY"),
             stay_alive,
             pending_screenshots: VecDeque::new(),
             control_queue: VecDeque::new(),
@@ -508,6 +516,9 @@ impl AutoWC {
     }
 
     pub fn check_child_exit(&mut self) {
+        self.process_pending_clipboard_sync();
+        self.reap_clipboard_sync_threads();
+
         let Some(child) = self.child.as_mut() else {
             return;
         };

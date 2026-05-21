@@ -17,7 +17,7 @@ use smithay::wayland::selection::data_device::{
     set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
     ServerDndGrabHandler,
 };
-use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::{delegate_data_device, delegate_output, delegate_seat};
 
 impl SeatHandler for AutoWC {
@@ -51,6 +51,15 @@ delegate_seat!(AutoWC);
 
 impl SelectionHandler for AutoWC {
     type SelectionUserData = ();
+
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        seat: Seat<Self>,
+    ) {
+        self.sync_clipboard_to_host(ty, source, seat);
+    }
 }
 
 impl DataDeviceHandler for AutoWC {
