@@ -56,7 +56,6 @@ pub struct AutoWC {
     pub first_alive_window_id: Option<AutoWindowId>,
     pub focused_window_id: Option<AutoWindowId>,
     pub host_window_requester: Option<HostWindowRequester>,
-    pub child: Option<Child>,
     pub launched_children: Vec<Child>,
     pub clipboard_sync_threads: Vec<JoinHandle<()>>,
     pub(crate) pending_clipboard_sync: Option<clipboard::PendingClipboardSync>,
@@ -158,7 +157,6 @@ impl AutoWC {
             first_alive_window_id: None,
             focused_window_id: None,
             host_window_requester: None,
-            child: None,
             launched_children: Vec::new(),
             clipboard_sync_threads: Vec::new(),
             pending_clipboard_sync: None,
@@ -563,36 +561,21 @@ impl AutoWC {
         self.maybe_exit_when_empty();
     }
 
-    pub fn check_child_exit(&mut self) {
+    pub fn reap_child_processes(&mut self) {
         self.process_pending_clipboard_sync();
         self.reap_clipboard_sync_threads();
-        self.reap_launched_children();
-
-        let Some(child) = self.child.as_mut() else {
-            return;
-        };
-
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                info!(%status, "initial child exited");
-                self.child = None;
-                self.maybe_exit_when_empty();
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(error = %err, "failed to poll initial child process");
-                self.child = None;
-                self.maybe_exit_when_empty();
-            }
+        if self.reap_launched_children() {
+            self.maybe_exit_when_empty();
         }
     }
 
-    pub fn launch_child(&mut self, command: &[String]) -> Result<(), String> {
+    pub fn launch_child(&mut self, command: &[OsString]) -> Result<(), String> {
         let Some((program, args)) = command.split_first() else {
             return Err("missing launch command".into());
         };
 
-        info!(%program, arg_count = args.len(), "launching child from control command");
+        let program_name = program.to_string_lossy();
+        info!(program = %program_name, arg_count = args.len(), "launching child process");
         let child = Command::new(program)
             .args(args)
             .stdin(Stdio::null())
@@ -600,27 +583,33 @@ impl AutoWC {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|err| {
-                error!(%program, error = %err, "failed to launch child from control command");
-                format!("failed to launch {program}: {err}")
+                error!(program = %program_name, error = %err, "failed to launch child process");
+                format!("failed to launch {program_name}: {err}")
             })?;
         self.launched_children.push(child);
-        self.reap_launched_children();
+        if self.reap_launched_children() {
+            self.maybe_exit_when_empty();
+        }
         Ok(())
     }
 
-    fn reap_launched_children(&mut self) {
+    fn reap_launched_children(&mut self) -> bool {
+        let mut reaped = false;
         self.launched_children
             .retain_mut(|child| match child.try_wait() {
                 Ok(Some(status)) => {
                     info!(%status, "launched child exited");
+                    reaped = true;
                     false
                 }
                 Ok(None) => true,
                 Err(err) => {
                     error!(error = %err, "failed to poll launched child process");
+                    reaped = true;
                     false
                 }
             });
+        reaped
     }
 
     pub fn configure_probe(&self, window: &Window) {

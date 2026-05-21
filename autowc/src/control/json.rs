@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{ffi::OsString, path::PathBuf};
 
 use serde::Deserialize;
 
@@ -122,7 +122,9 @@ impl JsonControlCommand {
                 if command.is_empty() {
                     return Err("launch requires at least one command argument".into());
                 }
-                ControlCommandVariant::Launch { command }
+                ControlCommandVariant::Launch {
+                    command: command.into_iter().map(OsString::from).collect(),
+                }
             }
             JsonControlCommandVariant::List => ControlCommandVariant::List,
             JsonControlCommandVariant::Quit => ControlCommandVariant::Quit,

@@ -13,11 +13,7 @@ mod wayland;
 mod window;
 mod winit;
 
-use std::{
-    ffi::OsString,
-    process::{Child, Command, Stdio},
-    time::Duration,
-};
+use std::{ffi::OsString, time::Duration};
 
 use clap::Parser;
 use protocol::Protocol;
@@ -112,8 +108,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
     info!(socket = ?state.socket_name, "configured nested wayland display");
 
-    state.child = Some(spawn_client(&cli.command)?);
-    init_child_watcher(&mut event_loop)?;
+    state
+        .launch_child(&cli.command)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+    init_process_watcher(&mut event_loop)?;
     init_control_scheduler(&mut event_loop)?;
 
     crate::stdin::init_stdin(&mut event_loop)?;
@@ -193,28 +191,14 @@ fn protocol_from_cli(cli: &Cli) -> Protocol {
     }
 }
 
-fn spawn_client(command: &[OsString]) -> Result<Child, Box<dyn std::error::Error>> {
-    let Some((program, args)) = command.split_first() else {
-        return Err("missing launch command".into());
-    };
-
-    info!(?program, arg_count = args.len(), "spawning initial client");
-    Ok(Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?)
-}
-
-fn init_child_watcher(
+fn init_process_watcher(
     event_loop: &mut EventLoop<AutoWC>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    debug!("installing child process watcher");
+    debug!("installing process watcher");
     event_loop.handle().insert_source(
         Timer::from_duration(Duration::from_millis(100)),
         |_, _, state| {
-            state.check_child_exit();
+            state.reap_child_processes();
             TimeoutAction::ToDuration(Duration::from_millis(100))
         },
     )?;

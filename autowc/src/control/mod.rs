@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{ffi::OsString, path::PathBuf};
 
 use smithay::backend::input::{ButtonState, KeyState};
 
@@ -63,7 +63,7 @@ pub enum ControlCommandVariant {
     Scroll { dx: f64, dy: f64 },
     Screenshot { path: Option<PathBuf> },
     Sleep { duration_ms: u64 },
-    Launch { command: Vec<String> },
+    Launch { command: Vec<OsString> },
     List,
     Quit,
 }
@@ -348,11 +348,7 @@ mod tests {
         assert_eq!(
             parse_control_command("launch gtk4-demo --run entry").unwrap(),
             command(ControlCommandVariant::Launch {
-                command: vec![
-                    "gtk4-demo".to_string(),
-                    "--run".to_string(),
-                    "entry".to_string(),
-                ],
+                command: vec!["gtk4-demo".into(), "--run".into(), "entry".into(),],
             })
         );
         assert!(parse_control_command("launch").is_err());
@@ -530,7 +526,7 @@ mod tests {
         assert_eq!(
             parse_json_control_command(r#"{"type":"launch","command":["gtk4-demo"]}"#).unwrap(),
             ControlCommandVariant::Launch {
-                command: vec!["gtk4-demo".to_string()],
+                command: vec!["gtk4-demo".into()],
             }
         );
         assert_eq!(
