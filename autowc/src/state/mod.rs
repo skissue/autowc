@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     ffi::OsString,
     path::PathBuf,
-    process::Child,
+    process::{Child, Command, Stdio},
     sync::Arc,
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -56,6 +56,7 @@ pub struct AutoWC {
     pub focused_window_id: Option<AutoWindowId>,
     pub host_window_requester: Option<HostWindowRequester>,
     pub child: Option<Child>,
+    pub launched_children: Vec<Child>,
     pub clipboard_sync_threads: Vec<JoinHandle<()>>,
     pub(crate) pending_clipboard_sync: Option<clipboard::PendingClipboardSync>,
     pub host_wayland_display: Option<OsString>,
@@ -148,6 +149,7 @@ impl AutoWC {
             focused_window_id: None,
             host_window_requester: None,
             child: None,
+            launched_children: Vec::new(),
             clipboard_sync_threads: Vec::new(),
             pending_clipboard_sync: None,
             host_wayland_display: std::env::var_os("WAYLAND_DISPLAY"),
@@ -518,6 +520,7 @@ impl AutoWC {
     pub fn check_child_exit(&mut self) {
         self.process_pending_clipboard_sync();
         self.reap_clipboard_sync_threads();
+        self.reap_launched_children();
 
         let Some(child) = self.child.as_mut() else {
             return;
@@ -536,6 +539,27 @@ impl AutoWC {
                 self.maybe_exit_when_empty();
             }
         }
+    }
+
+    pub fn launch_child(&mut self, command: &[String]) -> Result<(), String> {
+        let Some((program, args)) = command.split_first() else {
+            return Err("missing launch command".into());
+        };
+
+        let child = Command::new(program)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|err| format!("failed to launch {program}: {err}"))?;
+        self.launched_children.push(child);
+        self.reap_launched_children();
+        Ok(())
+    }
+
+    fn reap_launched_children(&mut self) {
+        self.launched_children
+            .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
     }
 
     pub fn configure_probe(&self, window: &Window) {

@@ -17,6 +17,10 @@ use crate::{
 
 impl AutoWC {
     pub fn process_control_command(&mut self, command: ControlCommand) -> Result<(), String> {
+        if let ControlCommandVariant::Launch { command } = &command.variant {
+            return self.launch_child(command);
+        }
+
         let window_id = match command.window {
             Some(window) => {
                 let window_id = AutoWindowId::from_raw(window)
@@ -146,6 +150,7 @@ impl AutoWC {
                     QueuedControlActionKind::Delay(Duration::from_millis(duration_ms)),
                 );
             }
+            ControlCommandVariant::Launch { .. } => unreachable!("launch is handled immediately"),
             ControlCommandVariant::Quit => {
                 self.queue_control_action(window_id, QueuedControlActionKind::Quit);
             }

@@ -63,6 +63,7 @@ pub enum ControlCommandVariant {
     Scroll { dx: f64, dy: f64 },
     Screenshot { path: Option<PathBuf> },
     Sleep { duration_ms: u64 },
+    Launch { command: Vec<String> },
     Quit,
 }
 
@@ -342,6 +343,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_launch() {
+        assert_eq!(
+            parse_control_command("launch gtk4-demo --run entry").unwrap(),
+            command(ControlCommandVariant::Launch {
+                command: vec![
+                    "gtk4-demo".to_string(),
+                    "--run".to_string(),
+                    "entry".to_string(),
+                ],
+            })
+        );
+        assert!(parse_control_command("launch").is_err());
+    }
+
+    #[test]
     fn parses_text_with_spaces() {
         assert_eq!(
             parse_control_command("text hello world").unwrap(),
@@ -502,6 +518,12 @@ mod tests {
             ControlCommandVariant::Sleep { duration_ms: 250 }
         );
         assert_eq!(
+            parse_json_control_command(r#"{"type":"launch","command":["gtk4-demo"]}"#).unwrap(),
+            ControlCommandVariant::Launch {
+                command: vec!["gtk4-demo".to_string()],
+            }
+        );
+        assert_eq!(
             parse_json_control_command(r#"{"type":"screenshot","path":"/tmp/autowc.png"}"#)
                 .unwrap(),
             ControlCommandVariant::Screenshot {
@@ -537,6 +559,7 @@ mod tests {
     fn rejects_invalid_json_input() {
         assert!(parse_json_control_command(r#"{"type":"key","key":"KeyNope"}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"chord","keys":[]}"#).is_err());
+        assert!(parse_json_control_command(r#"{"type":"launch","command":[]}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"mouse_button","action":"tap"}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"sleep","ms":-1}"#).is_err());
     }

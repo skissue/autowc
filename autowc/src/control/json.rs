@@ -68,6 +68,9 @@ enum JsonControlCommandVariant {
     Sleep {
         ms: u64,
     },
+    Launch {
+        command: Vec<String>,
+    },
     Quit,
 }
 
@@ -115,6 +118,12 @@ impl JsonControlCommand {
             }
             JsonControlCommandVariant::Sleep { ms } => {
                 ControlCommandVariant::Sleep { duration_ms: ms }
+            }
+            JsonControlCommandVariant::Launch { command } => {
+                if command.is_empty() {
+                    return Err("launch requires at least one command argument".into());
+                }
+                ControlCommandVariant::Launch { command }
             }
             JsonControlCommandVariant::Quit => ControlCommandVariant::Quit,
         };

@@ -42,6 +42,7 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
         "scroll" => parse_scroll(parts),
         "screenshot" => parse_screenshot(parts),
         "sleep" => parse_sleep(parts),
+        "launch" => parse_launch(parts),
         _ => Err(format!("unknown command: {command}")),
     }?;
 
@@ -192,5 +193,16 @@ fn parse_sleep<'a>(
 
     Ok(Some(ControlCommand::new(ControlCommandVariant::Sleep {
         duration_ms,
+    })))
+}
+
+fn parse_launch<'a>(parts: impl Iterator<Item = &'a str>) -> Result<Option<ControlCommand>, String> {
+    let command = parts.map(ToString::to_string).collect::<Vec<_>>();
+    if command.is_empty() {
+        return Err("usage: launch <command> [args...]".into());
+    }
+
+    Ok(Some(ControlCommand::new(ControlCommandVariant::Launch {
+        command,
     })))
 }
