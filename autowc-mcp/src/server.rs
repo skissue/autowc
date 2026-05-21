@@ -27,14 +27,17 @@ Typical flow:
 2. `list` reports the currently open windows and their stable AutoWC window IDs.
 3. `run` sends an ordered batch of input commands, optionally targeting a specific window.
 4. `screenshot` observes the current framebuffer, optionally targeting a specific window.
+5. `close` requests that a target window's client toplevel close.
 
 The MCP server owns one AutoWC compositor session. It starts AutoWC automatically with dynamic resizing and stay-alive enabled. The `launch` tool only starts an application process inside that compositor.
 
-When more than one window is open, call `list` and then pass the desired window ID to `run` or `screenshot`. If `window` is omitted, AutoWC uses the first existing window (lowest ID).
+When more than one window is open, call `list` and then pass the desired window ID to `run`, `screenshot`, or `close`. If `window` is omitted, AutoWC uses the first existing window (lowest ID).
 
 Mouse coordinates are virtual-display pixels with the origin at the top-left of the target AutoWC window. Keyboard commands use W3C KeyboardEvent.code physical key names, such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5.
 
 The run tool returns a final screenshot by default so agents can observe the result of their commands. When `run` has a `window` target, the returned screenshot uses the same target. Set `return_screenshot` to false only when intentionally running without immediate visual feedback or if your commands intend to close the targeted window.
+
+The close tool only sends a close request to the client toplevel; the application may still decide whether and when to exit.
 
 If AutoWC exits, later tool calls return ok=false with the captured stderr log.";
 
@@ -159,6 +162,21 @@ impl AutoWcMcpServer {
 
         Ok(list_result(windows))
     }
+
+    #[tool(
+        name = "close",
+        description = "Request that an AutoWC window's client toplevel close."
+    )]
+    pub async fn close(
+        &self,
+        Parameters(params): Parameters<CloseParams>,
+    ) -> Result<CallToolResult, String> {
+        if let Err(err) = self.session.close(params.window).await {
+            return Ok(error_result(err));
+        }
+
+        Ok(close_result(params.window))
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -203,6 +221,14 @@ pub struct ScreenshotParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListParams {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CloseParams {
+    #[schemars(
+        description = "Optional AutoWC window id to close. Omit to use AutoWC's default window."
+    )]
+    pub window: Option<u64>,
+}
 
 #[derive(Debug, Serialize)]
 struct ScreenshotMetadata {
@@ -292,6 +318,13 @@ fn list_result(windows: Vec<WindowInfo>) -> CallToolResult {
     }))
 }
 
+fn close_result(window: Option<u64>) -> CallToolResult {
+    CallToolResult::structured(json!({
+        "ok": true,
+        "window": window,
+    }))
+}
+
 fn error_result(err: SessionError) -> CallToolResult {
     let mut result = CallToolResult::error(vec![Content::text(err.message.clone())]);
     result.structured_content = Some(json!({
@@ -314,6 +347,7 @@ mod tests {
         assert!(SERVER_INSTRUCTIONS.contains("starts AutoWC automatically"));
         assert!(SERVER_INSTRUCTIONS.contains("call `list`"));
         assert!(SERVER_INSTRUCTIONS.contains("return_screenshot"));
+        assert!(SERVER_INSTRUCTIONS.contains("The close tool only sends a close request"));
         assert!(SERVER_INSTRUCTIONS.contains("W3C KeyboardEvent.code"));
         assert!(!SERVER_INSTRUCTIONS.contains("close stops"));
         assert!(!SERVER_INSTRUCTIONS.contains("KEY_*"));
@@ -360,6 +394,15 @@ mod tests {
         let schema = serde_json::to_string(&schema).unwrap();
 
         assert!(!schema.contains("session_id"));
+    }
+
+    #[test]
+    fn close_schema_documents_optional_window() {
+        let schema = schemars::schema_for!(CloseParams);
+        let schema = serde_json::to_string(&schema).unwrap();
+
+        assert!(schema.contains("Optional AutoWC window id"));
+        assert!(schema.contains("default window"));
     }
 
     #[test]
@@ -422,5 +465,14 @@ mod tests {
         assert_eq!(structured["windows"][0]["title"], "Dialog");
         assert_eq!(structured["windows"][0]["width"], 640);
         assert_eq!(structured["windows"][0]["height"], 480);
+    }
+
+    #[test]
+    fn close_result_includes_target_window() {
+        let result = close_result(Some(7));
+        let structured = result.structured_content.unwrap();
+
+        assert_eq!(structured["ok"], true);
+        assert_eq!(structured["window"], 7);
     }
 }

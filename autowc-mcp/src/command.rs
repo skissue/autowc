@@ -234,6 +234,18 @@ pub fn list_line() -> String {
     r#"{"type":"list"}"#.to_string()
 }
 
+pub fn close_line(window: Option<u64>) -> Result<String, String> {
+    let mut value = serde_json::json!({
+        "type": "close",
+    });
+
+    if let Some(window) = window {
+        value["window"] = serde_json::json!(window);
+    }
+
+    serde_json::to_string(&value).map_err(|err| err.to_string())
+}
+
 pub fn launch_line(command: &[String]) -> Result<String, String> {
     if command.is_empty() {
         return Err("launch command cannot be empty".into());
@@ -341,6 +353,15 @@ mod tests {
     #[test]
     fn serializes_list_command() {
         assert_eq!(list_line(), r#"{"type":"list"}"#);
+    }
+
+    #[test]
+    fn serializes_close_command() {
+        assert_eq!(close_line(None).unwrap(), r#"{"type":"close"}"#);
+        assert_eq!(
+            close_line(Some(5)).unwrap(),
+            r#"{"type":"close","window":5}"#
+        );
     }
 
     #[test]
