@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     sync::{Arc, Mutex as StdMutex},
@@ -12,11 +11,10 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
     process::{Child, ChildStderr, ChildStdout, Command},
     sync::Mutex,
-    time::{timeout, Duration},
+    time::Duration,
 };
-use uuid::Uuid;
 
-use crate::command::{list_line, screenshot_line, AutomationCommand};
+use crate::command::{launch_line, list_line, screenshot_line, AutomationCommand};
 
 const STDERR_LINE_LIMIT: usize = 200;
 const DEFAULT_DYNAMIC_WIDTH: u32 = 1280;
@@ -41,15 +39,6 @@ pub struct Screenshot {
     pub path: PathBuf,
     pub mime_type: &'static str,
     pub data_base64: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SessionMetadata {
-    pub session_id: String,
-    pub width: u32,
-    pub height: u32,
-    pub dynamic_resize: bool,
-    pub command: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -112,52 +101,40 @@ impl SessionError {
     }
 }
 
+impl std::fmt::Display for SessionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SessionError {}
+
 #[derive(Debug, Clone)]
 pub struct SessionManager {
-    sessions: Arc<Mutex<HashMap<String, Arc<Mutex<Session>>>>>,
+    session: Arc<Mutex<Session>>,
 }
 
 impl SessionManager {
-    pub fn new() -> Self {
-        Self {
-            sessions: Arc::new(Mutex::new(HashMap::new())),
-        }
+    pub async fn new(config: SessionConfig) -> Result<Self, SessionError> {
+        let session = Session::spawn(config).await?;
+        Ok(Self {
+            session: Arc::new(Mutex::new(session)),
+        })
     }
 
-    pub async fn launch(&self, config: SessionConfig) -> Result<SessionMetadata, SessionError> {
-        if config.command.is_empty() {
-            return Err(SessionError::new("launch command cannot be empty"));
-        }
-        let output_sizing = resolve_output_sizing(&config)?;
-
-        let id = Uuid::new_v4().to_string();
-        let metadata = SessionMetadata {
-            session_id: id.clone(),
-            width: output_sizing.width,
-            height: output_sizing.height,
-            dynamic_resize: output_sizing.dynamic_resize,
-            command: config.command.clone(),
-        };
-        let session = Session::spawn(config).await?;
-
-        self.sessions
-            .lock()
-            .await
-            .insert(id, Arc::new(Mutex::new(session)));
-
-        Ok(metadata)
+    pub async fn launch(&self, command: &[String]) -> Result<(), SessionError> {
+        let mut session = self.session.lock().await;
+        session.launch(command).await
     }
 
     pub async fn run(
         &self,
-        session_id: &str,
         commands: &[AutomationCommand],
         window: Option<u64>,
         return_screenshot: bool,
         screenshot_delay_ms: u64,
     ) -> Result<RunOutcome, RunError> {
-        let session = self.get_session(session_id).await.map_err(RunError::new)?;
-        let mut session = session.lock().await;
+        let mut session = self.session.lock().await;
         session
             .run(commands, window, return_screenshot, screenshot_delay_ms)
             .await
@@ -165,38 +142,16 @@ impl SessionManager {
 
     pub async fn screenshot(
         &self,
-        session_id: &str,
         path: Option<&Path>,
         window: Option<u64>,
     ) -> Result<Screenshot, SessionError> {
-        let session = self.get_session(session_id).await?;
-        let mut session = session.lock().await;
+        let mut session = self.session.lock().await;
         session.screenshot(path, window, true).await
     }
 
-    pub async fn list(&self, session_id: &str) -> Result<Vec<WindowInfo>, SessionError> {
-        let session = self.get_session(session_id).await?;
-        let mut session = session.lock().await;
+    pub async fn list(&self) -> Result<Vec<WindowInfo>, SessionError> {
+        let mut session = self.session.lock().await;
         session.list().await
-    }
-
-    pub async fn close(&self, session_id: &str) -> Result<bool, SessionError> {
-        let Some(session) = self.sessions.lock().await.remove(session_id) else {
-            return Ok(false);
-        };
-
-        let mut session = session.lock().await;
-        session.close().await;
-        Ok(true)
-    }
-
-    async fn get_session(&self, session_id: &str) -> Result<Arc<Mutex<Session>>, SessionError> {
-        self.sessions
-            .lock()
-            .await
-            .get(session_id)
-            .cloned()
-            .ok_or_else(|| SessionError::new(format!("unknown session: {session_id}")))
     }
 }
 
@@ -242,6 +197,12 @@ impl Session {
             stderr,
             exit_status: None,
         })
+    }
+
+    async fn launch(&mut self, command: &[String]) -> Result<(), SessionError> {
+        self.ensure_running().await?;
+        let line = launch_line(command).map_err(SessionError::new)?;
+        self.write_command_and_expect_ok(&line).await
     }
 
     async fn run(
@@ -392,16 +353,6 @@ impl Session {
         parse_response(&response).map_err(SessionError::new)
     }
 
-    async fn close(&mut self) {
-        let _ = self.write_line(r#"{"type":"quit"}"#).await;
-        if timeout(Duration::from_secs(2), self.child.wait())
-            .await
-            .is_err()
-        {
-            let _ = self.child.kill().await;
-        }
-    }
-
     async fn write_line(&mut self, line: &str) -> Result<(), SessionError> {
         self.ensure_running().await?;
         self.stdin.write_all(line.as_bytes()).await.map_err(|err| {
@@ -437,6 +388,12 @@ impl Session {
 
     fn process_error(&self, message: impl Into<String>) -> SessionError {
         SessionError::with_process(message, self.exit_status, self.stderr.snapshot())
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
     }
 }
 

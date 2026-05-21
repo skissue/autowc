@@ -234,6 +234,17 @@ pub fn list_line() -> String {
     r#"{"type":"list"}"#.to_string()
 }
 
+pub fn launch_line(command: &[String]) -> Result<String, String> {
+    if command.is_empty() {
+        return Err("launch command cannot be empty".into());
+    }
+    serde_json::to_string(&serde_json::json!({
+        "type": "launch",
+        "command": command,
+    }))
+    .map_err(|err| err.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +341,15 @@ mod tests {
     #[test]
     fn serializes_list_command() {
         assert_eq!(list_line(), r#"{"type":"list"}"#);
+    }
+
+    #[test]
+    fn serializes_launch_command() {
+        assert_eq!(
+            launch_line(&["foot".into(), "--hold".into()]).unwrap(),
+            r#"{"command":["foot","--hold"],"type":"launch"}"#
+        );
+        assert!(launch_line(&[]).is_err());
     }
 
     #[test]

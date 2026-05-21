@@ -15,7 +15,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let server = AutoWcMcpServer::new(cli.autowc_binary);
+    let server = AutoWcMcpServer::new(cli.autowc_binary).await?;
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())

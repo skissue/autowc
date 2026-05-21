@@ -12,8 +12,7 @@ use serde_json::json;
 use crate::{
     command::AutomationCommand,
     session::{
-        RunError, RunOutcome, Screenshot, SessionConfig, SessionError, SessionManager,
-        SessionMetadata, WindowInfo,
+        RunError, RunOutcome, Screenshot, SessionConfig, SessionError, SessionManager, WindowInfo,
     },
 };
 
@@ -38,7 +37,6 @@ If a session exits, later tool calls return ok=false with the captured stderr lo
 
 #[derive(Debug, Clone)]
 pub struct AutoWcMcpServer {
-    autowc_binary: PathBuf,
     sessions: SessionManager,
     tool_router: ToolRouter<Self>,
 }
@@ -54,48 +52,45 @@ impl ServerHandler for AutoWcMcpServer {
 
 #[tool_router(router = tool_router)]
 impl AutoWcMcpServer {
-    pub fn new(autowc_binary: PathBuf) -> Self {
-        Self {
+    pub async fn new(autowc_binary: PathBuf) -> Result<Self, SessionError> {
+        let sessions = SessionManager::new(SessionConfig {
             autowc_binary,
-            sessions: SessionManager::new(),
+            command: vec!["true".into()],
+            width: None,
+            height: None,
+            dynamic_resize: false,
+            stay_alive: true,
+            key_event_interval_ms: None,
+            chord_key_interval_ms: None,
+            chord_hold_ms: None,
+            command_interval_ms: None,
+        })
+        .await?;
+
+        Ok(Self {
+            sessions,
             tool_router: Self::tool_router(),
-        }
+        })
     }
 
     #[tool(
         name = "launch",
-        description = "Start an AutoWC session by running a command inside a nested compositor."
+        description = "Launch a process inside the running AutoWC compositor session."
     )]
     pub async fn launch(
         &self,
         Parameters(params): Parameters<LaunchParams>,
     ) -> Result<CallToolResult, String> {
-        let metadata = match self
-            .sessions
-            .launch(SessionConfig {
-                autowc_binary: self.autowc_binary.clone(),
-                command: params.command,
-                width: params.width,
-                height: params.height,
-                dynamic_resize: params.dynamic_resize.unwrap_or(false),
-                stay_alive: params.stay_alive.unwrap_or(false),
-                key_event_interval_ms: params.key_event_interval_ms,
-                chord_key_interval_ms: params.chord_key_interval_ms,
-                chord_hold_ms: params.chord_hold_ms,
-                command_interval_ms: params.command_interval_ms,
-            })
-            .await
-        {
-            Ok(metadata) => metadata,
-            Err(err) => return Ok(error_result(None, err)),
-        };
+        if let Err(err) = self.sessions.launch(&params.command).await {
+            return Ok(error_result(err));
+        }
 
-        Ok(metadata_result(metadata))
+        Ok(launch_result(params.command))
     }
 
     #[tool(
         name = "run",
-        description = "Send a batch of automation commands to a session."
+        description = "Send a batch of automation commands to the running AutoWC compositor session."
     )]
     pub async fn run(
         &self,
@@ -108,7 +103,6 @@ impl AutoWcMcpServer {
         let outcome = match self
             .sessions
             .run(
-                &params.session_id,
                 &params.commands,
                 params.window,
                 return_screenshot,
@@ -117,10 +111,10 @@ impl AutoWcMcpServer {
             .await
         {
             Ok(outcome) => outcome,
-            Err(err) => return Ok(run_error_result(params.session_id, err)),
+            Err(err) => return Ok(run_error_result(err)),
         };
 
-        Ok(run_result(params.session_id, outcome))
+        Ok(run_result(outcome))
     }
 
     #[tool(
@@ -133,96 +127,43 @@ impl AutoWcMcpServer {
     ) -> Result<CallToolResult, String> {
         let screenshot = match self
             .sessions
-            .screenshot(&params.session_id, params.path.as_deref(), params.window)
+            .screenshot(params.path.as_deref(), params.window)
             .await
         {
             Ok(screenshot) => screenshot,
-            Err(err) => return Ok(error_result(Some(params.session_id), err)),
+            Err(err) => return Ok(error_result(err)),
         };
 
-        Ok(screenshot_result(params.session_id, screenshot))
+        Ok(screenshot_result(screenshot))
     }
 
     #[tool(
         name = "list",
-        description = "List the open AutoWC windows in a session, including stable window ids for targeted automation."
+        description = "List the open AutoWC windows in the running compositor session, including stable window ids for targeted automation."
     )]
     pub async fn list(
         &self,
-        Parameters(params): Parameters<ListParams>,
+        Parameters(_params): Parameters<ListParams>,
     ) -> Result<CallToolResult, String> {
-        let windows = match self.sessions.list(&params.session_id).await {
+        let windows = match self.sessions.list().await {
             Ok(windows) => windows,
-            Err(err) => return Ok(error_result(Some(params.session_id), err)),
+            Err(err) => return Ok(error_result(err)),
         };
 
-        Ok(list_result(params.session_id, windows))
-    }
-
-    #[tool(
-        name = "close",
-        description = "Close a session and stop its compositor process."
-    )]
-    pub async fn close(
-        &self,
-        Parameters(params): Parameters<CloseParams>,
-    ) -> Result<CallToolResult, String> {
-        let closed = match self.sessions.close(&params.session_id).await {
-            Ok(closed) => closed,
-            Err(err) => return Ok(error_result(Some(params.session_id), err)),
-        };
-        Ok(CallToolResult::structured(json!({
-            "ok": true,
-            "session_id": params.session_id,
-            "closed": closed,
-        })))
+        Ok(list_result(windows))
     }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct LaunchParams {
     #[schemars(
-        description = "Command to run inside AutoWC as argv: the first item is the executable, and the remaining items are its arguments."
+        description = "Command to launch inside the running AutoWC compositor as argv: the first item is the executable, and the remaining items are its arguments."
     )]
     pub command: Vec<String>,
-    #[schemars(
-        description = "Fixed virtual display width in pixels. Omit width and height for the recommended dynamic-size default. If provided, height must also be provided."
-    )]
-    pub width: Option<u32>,
-    #[schemars(
-        description = "Fixed virtual display height in pixels. Omit width and height for the recommended dynamic-size default. If provided, width must also be provided."
-    )]
-    pub height: Option<u32>,
-    #[schemars(
-        description = "Explicitly request dynamic resizing, where the virtual display follows the host window size. Defaults to dynamic when width and height are omitted, and cannot be combined with width or height."
-    )]
-    pub dynamic_resize: Option<bool>,
-    #[schemars(
-        description = "When true, keep the AutoWC session running after all client windows exit. Defaults to false."
-    )]
-    pub stay_alive: Option<bool>,
-    #[schemars(
-        description = "Delay in milliseconds between synthetic key press and release events. Uses AutoWC's default when omitted."
-    )]
-    pub key_event_interval_ms: Option<u64>,
-    #[schemars(
-        description = "Delay in milliseconds between pressing each key in a chord. Uses AutoWC's default when omitted."
-    )]
-    pub chord_key_interval_ms: Option<u64>,
-    #[schemars(
-        description = "Duration in milliseconds to hold a chord after all keys are pressed. Uses AutoWC's default when omitted."
-    )]
-    pub chord_hold_ms: Option<u64>,
-    #[schemars(
-        description = "Delay in milliseconds after each command in a run batch. Uses AutoWC's default when omitted."
-    )]
-    pub command_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunParams {
-    #[schemars(description = "Session id returned by launch.")]
-    pub session_id: String,
     #[schemars(
         description = "Ordered automation command batch. Command types are key, chord, text, mouse_move, mouse_button, click, scroll, and sleep."
     )]
@@ -243,8 +184,6 @@ pub struct RunParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenshotParams {
-    #[schemars(description = "Session id returned by launch.")]
-    pub session_id: String,
     #[schemars(
         description = "Optional PNG output path. When omitted, AutoWC writes to a temporary file; the MCP result includes the image inline either way."
     )]
@@ -256,16 +195,7 @@ pub struct ScreenshotParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct ListParams {
-    #[schemars(description = "Session id returned by launch.")]
-    pub session_id: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct CloseParams {
-    #[schemars(description = "Session id returned by launch.")]
-    pub session_id: String,
-}
+pub struct ListParams {}
 
 #[derive(Debug, Serialize)]
 struct ScreenshotMetadata {
@@ -273,18 +203,14 @@ struct ScreenshotMetadata {
     mime_type: &'static str,
 }
 
-fn metadata_result(metadata: SessionMetadata) -> CallToolResult {
+fn launch_result(command: Vec<String>) -> CallToolResult {
     CallToolResult::structured(json!({
         "ok": true,
-        "session_id": metadata.session_id,
-        "width": metadata.width,
-        "height": metadata.height,
-        "dynamic_resize": metadata.dynamic_resize,
-        "command": metadata.command,
+        "command": command,
     }))
 }
 
-fn run_result(session_id: String, outcome: RunOutcome) -> CallToolResult {
+fn run_result(outcome: RunOutcome) -> CallToolResult {
     let mut content = vec![Content::text("ok")];
     let screenshot_metadata = if let Some(screenshot) = outcome.screenshot {
         content.push(Content::image(
@@ -302,14 +228,13 @@ fn run_result(session_id: String, outcome: RunOutcome) -> CallToolResult {
     let mut result = CallToolResult::success(content);
     result.structured_content = Some(json!({
             "ok": true,
-            "session_id": session_id,
             "commands_executed": outcome.commands_executed,
             "screenshot": screenshot_metadata,
     }));
     result
 }
 
-fn run_error_result(session_id: String, err: RunError) -> CallToolResult {
+fn run_error_result(err: RunError) -> CallToolResult {
     let mut content = vec![Content::text(err.error.message.clone())];
     let screenshot_metadata = if let Some(screenshot) = err.screenshot {
         content.push(Content::image(
@@ -327,7 +252,6 @@ fn run_error_result(session_id: String, err: RunError) -> CallToolResult {
     let mut result = CallToolResult::error(content);
     result.structured_content = Some(json!({
         "ok": false,
-        "session_id": session_id,
         "error": err.error.message,
         "exit_status": err.error.exit_status,
         "stderr": err.error.stderr,
@@ -337,14 +261,13 @@ fn run_error_result(session_id: String, err: RunError) -> CallToolResult {
     result
 }
 
-fn screenshot_result(session_id: String, screenshot: Screenshot) -> CallToolResult {
+fn screenshot_result(screenshot: Screenshot) -> CallToolResult {
     let mut result = CallToolResult::success(vec![
         Content::text("ok"),
         Content::image(screenshot.data_base64.clone(), screenshot.mime_type),
     ]);
     result.structured_content = Some(json!({
             "ok": true,
-            "session_id": session_id,
             "screenshot": ScreenshotMetadata {
                 path: screenshot.path,
                 mime_type: screenshot.mime_type,
@@ -353,19 +276,17 @@ fn screenshot_result(session_id: String, screenshot: Screenshot) -> CallToolResu
     result
 }
 
-fn list_result(session_id: String, windows: Vec<WindowInfo>) -> CallToolResult {
+fn list_result(windows: Vec<WindowInfo>) -> CallToolResult {
     CallToolResult::structured(json!({
         "ok": true,
-        "session_id": session_id,
         "windows": windows,
     }))
 }
 
-fn error_result(session_id: Option<String>, err: SessionError) -> CallToolResult {
+fn error_result(err: SessionError) -> CallToolResult {
     let mut result = CallToolResult::error(vec![Content::text(err.message.clone())]);
     result.structured_content = Some(json!({
         "ok": false,
-        "session_id": session_id,
         "error": err.message,
         "exit_status": err.exit_status,
         "stderr": err.stderr,
@@ -389,16 +310,14 @@ mod tests {
     }
 
     #[test]
-    fn launch_schema_documents_session_options() {
+    fn launch_schema_documents_process_command() {
         let schema = schemars::schema_for!(LaunchParams);
         let schema = serde_json::to_string(&schema).unwrap();
 
         assert!(schema.contains("first item is the executable"));
-        assert!(schema.contains("recommended dynamic-size default"));
-        assert!(schema.contains("dynamic resizing"));
-        assert!(schema.contains("cannot be combined with width or height"));
-        assert!(schema.contains("stay"));
-        assert!(schema.contains("Delay in milliseconds"));
+        assert!(schema.contains("running AutoWC compositor"));
+        assert!(!schema.contains("width"));
+        assert!(!schema.contains("session"));
     }
 
     #[test]
@@ -425,26 +344,23 @@ mod tests {
     }
 
     #[test]
-    fn list_schema_documents_session_id() {
+    fn list_schema_has_no_required_params() {
         let schema = schemars::schema_for!(ListParams);
         let schema = serde_json::to_string(&schema).unwrap();
 
-        assert!(schema.contains("Session id returned by launch"));
+        assert!(!schema.contains("session_id"));
     }
 
     #[test]
     fn run_result_includes_inline_image_when_present() {
-        let result = run_result(
-            "session".into(),
-            RunOutcome {
-                commands_executed: 1,
-                screenshot: Some(Screenshot {
-                    path: PathBuf::from("/tmp/image.png"),
-                    mime_type: "image/png",
-                    data_base64: "abc".into(),
-                }),
-            },
-        );
+        let result = run_result(RunOutcome {
+            commands_executed: 1,
+            screenshot: Some(Screenshot {
+                path: PathBuf::from("/tmp/image.png"),
+                mime_type: "image/png",
+                data_base64: "abc".into(),
+            }),
+        });
 
         assert_eq!(result.content.len(), 2);
         assert!(result.content[1].as_image().is_some());
@@ -453,22 +369,19 @@ mod tests {
 
     #[test]
     fn run_error_result_includes_partial_count_and_screenshot() {
-        let result = run_error_result(
-            "session".into(),
-            RunError {
-                error: SessionError {
-                    message: "unknown key: CTRL".into(),
-                    exit_status: None,
-                    stderr: String::new(),
-                },
-                commands_executed: 2,
-                screenshot: Some(Screenshot {
-                    path: PathBuf::from("/tmp/image.png"),
-                    mime_type: "image/png",
-                    data_base64: "abc".into(),
-                }),
+        let result = run_error_result(RunError {
+            error: SessionError {
+                message: "unknown key: CTRL".into(),
+                exit_status: None,
+                stderr: String::new(),
             },
-        );
+            commands_executed: 2,
+            screenshot: Some(Screenshot {
+                path: PathBuf::from("/tmp/image.png"),
+                mime_type: "image/png",
+                data_base64: "abc".into(),
+            }),
+        });
 
         assert!(result.is_error.unwrap_or(false));
         assert_eq!(result.content.len(), 2);
@@ -481,19 +394,15 @@ mod tests {
 
     #[test]
     fn list_result_includes_windows() {
-        let result = list_result(
-            "session".into(),
-            vec![WindowInfo {
-                id: 2,
-                title: "Dialog".into(),
-                width: 640,
-                height: 480,
-            }],
-        );
+        let result = list_result(vec![WindowInfo {
+            id: 2,
+            title: "Dialog".into(),
+            width: 640,
+            height: 480,
+        }]);
 
         let structured = result.structured_content.unwrap();
         assert_eq!(structured["ok"], true);
-        assert_eq!(structured["session_id"], "session");
         assert_eq!(structured["windows"][0]["id"], 2);
         assert_eq!(structured["windows"][0]["title"], "Dialog");
         assert_eq!(structured["windows"][0]["width"], 640);
