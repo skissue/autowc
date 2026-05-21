@@ -361,6 +361,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_close() {
+        assert_eq!(
+            parse_control_command("close").unwrap(),
+            command(ControlCommandVariant::Close)
+        );
+        assert!(parse_control_command("close extra").is_err());
+    }
+
+    #[test]
     fn parses_text_with_spaces() {
         assert_eq!(
             parse_control_command("text hello world").unwrap(),
@@ -383,6 +392,10 @@ mod tests {
                     action: PressAction::Press,
                 }
             )
+        );
+        assert_eq!(
+            parse_control_command("4 close").unwrap(),
+            targeted_command(4, ControlCommandVariant::Close)
         );
         assert!(parse_control_command("0 text bad").is_err());
         assert!(parse_control_command("2").is_err());

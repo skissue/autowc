@@ -44,6 +44,7 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
         "sleep" => parse_sleep(parts),
         "launch" => parse_launch(parts),
         "list" => parse_list(parts),
+        "close" => parse_close(parts),
         _ => Err(format!("unknown command: {command}")),
     }?;
 
@@ -213,4 +214,9 @@ fn parse_launch<'a>(
 fn parse_list<'a>(parts: impl Iterator<Item = &'a str>) -> Result<Option<ControlCommand>, String> {
     ensure_no_extra(parts)?;
     Ok(Some(ControlCommand::new(ControlCommandVariant::List)))
+}
+
+fn parse_close<'a>(parts: impl Iterator<Item = &'a str>) -> Result<Option<ControlCommand>, String> {
+    ensure_no_extra(parts)?;
+    Ok(Some(ControlCommand::new(ControlCommandVariant::Close)))
 }
