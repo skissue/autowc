@@ -13,7 +13,7 @@ use crate::{
     command::AutomationCommand,
     session::{
         RunError, RunOutcome, Screenshot, SessionConfig, SessionError, SessionManager,
-        SessionMetadata,
+        SessionMetadata, WindowInfo,
     },
 };
 
@@ -143,6 +143,22 @@ impl AutoWcMcpServer {
     }
 
     #[tool(
+        name = "list",
+        description = "List the open AutoWC windows in a session, including stable window ids for targeted automation."
+    )]
+    pub async fn list(
+        &self,
+        Parameters(params): Parameters<ListParams>,
+    ) -> Result<CallToolResult, String> {
+        let windows = match self.sessions.list(&params.session_id).await {
+            Ok(windows) => windows,
+            Err(err) => return Ok(error_result(Some(params.session_id), err)),
+        };
+
+        Ok(list_result(params.session_id, windows))
+    }
+
+    #[tool(
         name = "close",
         description = "Close a session and stop its compositor process."
     )]
@@ -228,6 +244,12 @@ pub struct ScreenshotParams {
         description = "Optional PNG output path. When omitted, AutoWC writes to a temporary file; the MCP result includes the image inline either way."
     )]
     pub path: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListParams {
+    #[schemars(description = "Session id returned by launch.")]
+    pub session_id: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -322,6 +344,14 @@ fn screenshot_result(session_id: String, screenshot: Screenshot) -> CallToolResu
     result
 }
 
+fn list_result(session_id: String, windows: Vec<WindowInfo>) -> CallToolResult {
+    CallToolResult::structured(json!({
+        "ok": true,
+        "session_id": session_id,
+        "windows": windows,
+    }))
+}
+
 fn error_result(session_id: Option<String>, err: SessionError) -> CallToolResult {
     let mut result = CallToolResult::error(vec![Content::text(err.message.clone())]);
     result.structured_content = Some(json!({
@@ -384,6 +414,14 @@ mod tests {
     }
 
     #[test]
+    fn list_schema_documents_session_id() {
+        let schema = schemars::schema_for!(ListParams);
+        let schema = serde_json::to_string(&schema).unwrap();
+
+        assert!(schema.contains("Session id returned by launch"));
+    }
+
+    #[test]
     fn run_result_includes_inline_image_when_present() {
         let result = run_result(
             "session".into(),
@@ -428,5 +466,26 @@ mod tests {
         assert_eq!(structured["commands_executed"], 2);
         assert_eq!(structured["error"], "unknown key: CTRL");
         assert_eq!(structured["screenshot"]["mime_type"], "image/png");
+    }
+
+    #[test]
+    fn list_result_includes_windows() {
+        let result = list_result(
+            "session".into(),
+            vec![WindowInfo {
+                id: 2,
+                title: "Dialog".into(),
+                width: 640,
+                height: 480,
+            }],
+        );
+
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["ok"], true);
+        assert_eq!(structured["session_id"], "session");
+        assert_eq!(structured["windows"][0]["id"], 2);
+        assert_eq!(structured["windows"][0]["title"], "Dialog");
+        assert_eq!(structured["windows"][0]["width"], 640);
+        assert_eq!(structured["windows"][0]["height"], 480);
     }
 }

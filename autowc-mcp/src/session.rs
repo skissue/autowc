@@ -16,7 +16,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::command::{screenshot_line, AutomationCommand};
+use crate::command::{list_line, screenshot_line, AutomationCommand};
 
 const STDERR_LINE_LIMIT: usize = 200;
 const DEFAULT_DYNAMIC_WIDTH: u32 = 1280;
@@ -50,6 +50,14 @@ pub struct SessionMetadata {
     pub height: u32,
     pub dynamic_resize: bool,
     pub command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WindowInfo {
+    pub id: u64,
+    pub title: String,
+    pub width: i32,
+    pub height: i32,
 }
 
 #[derive(Debug)]
@@ -162,6 +170,12 @@ impl SessionManager {
         let session = self.get_session(session_id).await?;
         let mut session = session.lock().await;
         session.screenshot(path, true).await
+    }
+
+    pub async fn list(&self, session_id: &str) -> Result<Vec<WindowInfo>, SessionError> {
+        let session = self.get_session(session_id).await?;
+        let mut session = session.lock().await;
+        session.list().await
     }
 
     pub async fn close(&self, session_id: &str) -> Result<bool, SessionError> {
@@ -303,6 +317,9 @@ impl Session {
             AutowcResponse::Screenshot { .. } => Err(SessionError::new(
                 "unexpected screenshot response while awaiting ok",
             )),
+            AutowcResponse::WindowList { .. } => Err(SessionError::new(
+                "unexpected window list response while awaiting ok",
+            )),
         }
     }
 
@@ -318,6 +335,11 @@ impl Session {
         loop {
             match self.read_response().await? {
                 AutowcResponse::Ok => continue,
+                AutowcResponse::WindowList { .. } => {
+                    return Err(SessionError::new(
+                        "unexpected window list response while awaiting screenshot",
+                    ));
+                }
                 AutowcResponse::Screenshot { path } => {
                     let data_base64 = if include_data {
                         STANDARD.encode(fs::read(&path).await.map_err(|err| {
@@ -334,6 +356,20 @@ impl Session {
                     });
                 }
             }
+        }
+    }
+
+    async fn list(&mut self) -> Result<Vec<WindowInfo>, SessionError> {
+        self.ensure_running().await?;
+        self.write_line(&list_line()).await?;
+        match self.read_response().await? {
+            AutowcResponse::WindowList { windows } => Ok(windows),
+            AutowcResponse::Ok => Err(SessionError::new(
+                "unexpected ok response while awaiting window list",
+            )),
+            AutowcResponse::Screenshot { .. } => Err(SessionError::new(
+                "unexpected screenshot response while awaiting window list",
+            )),
         }
     }
 
@@ -524,6 +560,7 @@ impl SharedStderr {
 enum AutowcResponse {
     Ok,
     Screenshot { path: PathBuf },
+    WindowList { windows: Vec<WindowInfo> },
 }
 
 fn parse_response(line: &str) -> Result<AutowcResponse, String> {
@@ -535,6 +572,10 @@ fn parse_response(line: &str) -> Result<AutowcResponse, String> {
     }
     if !response.ok {
         return Err("AutoWC returned ok=false without an error message".into());
+    }
+
+    if let Some(windows) = response.windows {
+        return Ok(AutowcResponse::WindowList { windows });
     }
 
     match response.response_type.as_deref() {
@@ -558,6 +599,7 @@ struct JsonAutowcResponse {
     #[serde(rename = "type")]
     response_type: Option<String>,
     path: Option<PathBuf>,
+    windows: Option<Vec<WindowInfo>>,
     error: Option<String>,
 }
 
@@ -574,6 +616,7 @@ mod tests {
             AutowcResponse::Screenshot { path } => {
                 assert_eq!(path, PathBuf::from("/tmp/autowc.png"));
             }
+            AutowcResponse::WindowList { .. } => panic!("expected screenshot response"),
         }
     }
 
@@ -591,6 +634,28 @@ mod tests {
             parse_response(r#"{"ok":false,"error":"unsupported key"}"#).unwrap_err(),
             "unsupported key"
         );
+    }
+
+    #[test]
+    fn parses_window_list_response() {
+        let response = parse_response(
+            r#"{"ok":true,"windows":[{"id":2,"title":"Dialog","width":640,"height":480}]}"#,
+        )
+        .unwrap();
+        match response {
+            AutowcResponse::WindowList { windows } => {
+                assert_eq!(
+                    windows,
+                    vec![WindowInfo {
+                        id: 2,
+                        title: "Dialog".into(),
+                        width: 640,
+                        height: 480,
+                    }]
+                );
+            }
+            other => panic!("expected window list response, got {other:?}"),
+        }
     }
 
     #[test]

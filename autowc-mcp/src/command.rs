@@ -222,6 +222,10 @@ pub fn screenshot_line(path: Option<&Path>) -> Result<String, String> {
     serde_json::to_string(&value).map_err(|err| err.to_string())
 }
 
+pub fn list_line() -> String {
+    r#"{"type":"list"}"#.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +297,11 @@ mod tests {
             r#"{"path":"/tmp/has space.png","type":"screenshot"}"#
         );
         assert_eq!(screenshot_line(None).unwrap(), r#"{"type":"screenshot"}"#);
+    }
+
+    #[test]
+    fn serializes_list_command() {
+        assert_eq!(list_line(), r#"{"type":"list"}"#);
     }
 
     #[test]
