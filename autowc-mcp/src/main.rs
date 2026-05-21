@@ -16,7 +16,10 @@ struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let server = AutoWcMcpServer::new(cli.autowc_binary).await?;
+    let shutdown = server.clone();
     let service = server.serve(stdio()).await?;
-    service.waiting().await?;
+    let result = service.waiting().await;
+    shutdown.shutdown().await;
+    result?;
     Ok(())
 }

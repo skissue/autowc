@@ -2,6 +2,7 @@ use std::{
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     sync::{Arc, Mutex as StdMutex},
+    time::Duration,
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -18,6 +19,9 @@ use crate::command::{launch_line, list_line, screenshot_line, AutomationCommand}
 const STDERR_LINE_LIMIT: usize = 200;
 const DEFAULT_DYNAMIC_WIDTH: u32 = 1280;
 const DEFAULT_DYNAMIC_HEIGHT: u32 = 720;
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const FORCED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+const QUIT_COMMAND: &str = r#"{"type":"quit"}"#;
 
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -164,6 +168,11 @@ impl SessionManager {
     pub async fn list(&self) -> Result<Vec<WindowInfo>, SessionError> {
         let mut session = self.session.lock().await;
         session.list().await
+    }
+
+    pub async fn shutdown(&self) {
+        let mut session = self.session.lock().await;
+        session.shutdown().await;
     }
 }
 
@@ -353,6 +362,30 @@ impl Session {
         }
     }
 
+    async fn shutdown(&mut self) {
+        self.refresh_exit_status();
+        if self.exit_status.is_some() {
+            return;
+        }
+
+        let quit_sent = self.write_line(QUIT_COMMAND).await.is_ok();
+        if quit_sent {
+            if let Ok(Ok(status)) =
+                tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, self.child.wait()).await
+            {
+                self.exit_status = Some(status);
+                return;
+            }
+        }
+
+        let _ = self.child.start_kill();
+        if let Ok(Ok(status)) =
+            tokio::time::timeout(FORCED_SHUTDOWN_TIMEOUT, self.child.wait()).await
+        {
+            self.exit_status = Some(status);
+        }
+    }
+
     async fn execute_plan(
         &mut self,
         plan: impl IntoIterator<Item = PlannedCommand>,
@@ -420,7 +453,10 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = self.child.start_kill();
+        self.refresh_exit_status();
+        if self.exit_status.is_none() {
+            let _ = self.child.start_kill();
+        }
     }
 }
 

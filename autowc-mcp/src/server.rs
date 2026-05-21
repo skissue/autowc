@@ -75,6 +75,10 @@ impl AutoWcMcpServer {
         })
     }
 
+    pub async fn shutdown(&self) {
+        self.sessions.shutdown().await;
+    }
+
     #[tool(
         name = "launch",
         description = "Launch a process inside the running AutoWC compositor session."
