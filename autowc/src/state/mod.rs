@@ -896,18 +896,22 @@ impl AutoWC {
             warn!(?host_window_id, "close requested for unknown host window");
             return;
         };
-        info!(
-            ?window_id,
-            ?host_window_id,
-            "sending close to client toplevel"
-        );
-        if let Some(window) = self
+        if let Err(err) = self.close_auto_window(window_id) {
+            warn!(?window_id, error = %err, "failed to close requested host window");
+        }
+    }
+
+    pub fn close_auto_window(&self, window_id: AutoWindowId) -> Result<(), String> {
+        let Some(window) = self
             .windows
             .get(window_id)
             .and_then(|window| window.primary_window())
-        {
-            window.toplevel().unwrap().send_close();
-        }
+        else {
+            return Err(format!("unknown window: {}", window_id.raw()));
+        };
+        info!(?window_id, "sending close to client toplevel");
+        window.toplevel().unwrap().send_close();
+        Ok(())
     }
 
     fn map_configured_window(&mut self, window_id: AutoWindowId) {
@@ -1179,6 +1183,7 @@ pub enum QueuedControlActionKind {
         path: Option<PathBuf>,
         delay_after: Duration,
     },
+    Close,
     Delay(Duration),
     Respond {
         response: ControlResponse,

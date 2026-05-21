@@ -78,8 +78,10 @@ impl AutoWC {
         };
         debug!(?window_id, "control command target selected");
 
-        let responds_with_screenshot =
-            matches!(&command.variant, ControlCommandVariant::Screenshot { .. });
+        let queued_action_handles_response = matches!(
+            &command.variant,
+            ControlCommandVariant::Screenshot { .. } | ControlCommandVariant::Close
+        );
 
         match command.variant {
             ControlCommandVariant::Key { code, action } => {
@@ -224,6 +226,9 @@ impl AutoWC {
                     },
                 );
             }
+            ControlCommandVariant::Close => {
+                self.queue_control_action(window_id, response, QueuedControlActionKind::Close);
+            }
             ControlCommandVariant::Sleep { duration_ms } => {
                 self.queue_control_action(
                     window_id,
@@ -236,7 +241,7 @@ impl AutoWC {
             ControlCommandVariant::Quit => unreachable!("quit is handled immediately"),
         }
 
-        if !responds_with_screenshot {
+        if !queued_action_handles_response {
             self.queue_control_action(
                 window_id,
                 response,
@@ -298,6 +303,14 @@ impl AutoWC {
                         self.next_control_action_at = Some(Instant::now() + delay_after);
                         return;
                     }
+                }
+                QueuedControlActionKind::Close => {
+                    let response = match self.close_auto_window(action.window_id) {
+                        Ok(()) => ControlResponse::Ok,
+                        Err(err) => ControlResponse::Error(err),
+                    };
+                    self.complete_control_response(action.response, response);
+                    self.flush_control_responses();
                 }
                 QueuedControlActionKind::Delay(duration) => {
                     self.next_control_action_at = Some(Instant::now() + duration);

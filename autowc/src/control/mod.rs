@@ -61,6 +61,7 @@ pub enum ControlCommandVariant {
     Sleep { duration_ms: u64 },
     Launch { command: Vec<OsString> },
     List,
+    Close,
     Quit,
 }
 
@@ -530,6 +531,10 @@ mod tests {
             ControlCommandVariant::List
         );
         assert_eq!(
+            parse_json_control_command(r#"{"type":"close"}"#).unwrap(),
+            ControlCommandVariant::Close
+        );
+        assert_eq!(
             parse_json_control_command(r#"{"type":"screenshot","path":"/tmp/autowc.png"}"#)
                 .unwrap(),
             ControlCommandVariant::Screenshot {
@@ -556,6 +561,13 @@ mod tests {
             ControlCommand {
                 window: Some(3),
                 variant: ControlCommandVariant::Screenshot { path: None },
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"close","window":4}"#).unwrap(),
+            ControlCommand {
+                window: Some(4),
+                variant: ControlCommandVariant::Close,
             }
         );
         assert!(parse_json_control_command(r#"{"type":"text","window":0,"text":"bad"}"#).is_err());
