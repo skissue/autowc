@@ -24,7 +24,7 @@ const FORCED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const QUIT_COMMAND: &str = r#"{"type":"quit"}"#;
 
 #[derive(Debug, Clone)]
-pub struct SessionConfig {
+pub struct AutoWcSessionConfig {
     pub autowc_binary: PathBuf,
     pub command: Vec<String>,
     pub width: Option<u32>,
@@ -126,21 +126,21 @@ impl std::fmt::Display for SessionError {
 impl std::error::Error for SessionError {}
 
 #[derive(Debug, Clone)]
-pub struct SessionManager {
-    session: Arc<Mutex<Session>>,
+pub struct AutoWcSession {
+    inner: Arc<Mutex<AutoWcProcess>>,
 }
 
-impl SessionManager {
-    pub async fn new(config: SessionConfig) -> Result<Self, SessionError> {
-        let session = Session::spawn(config).await?;
+impl AutoWcSession {
+    pub async fn new(config: AutoWcSessionConfig) -> Result<Self, SessionError> {
+        let process = AutoWcProcess::spawn(config).await?;
         Ok(Self {
-            session: Arc::new(Mutex::new(session)),
+            inner: Arc::new(Mutex::new(process)),
         })
     }
 
     pub async fn launch(&self, command: &[String]) -> Result<(), SessionError> {
-        let mut session = self.session.lock().await;
-        session.launch(command).await
+        let mut process = self.inner.lock().await;
+        process.launch(command).await
     }
 
     pub async fn run(
@@ -150,8 +150,8 @@ impl SessionManager {
         return_screenshot: bool,
         screenshot_delay_ms: u64,
     ) -> Result<RunOutcome, RunError> {
-        let mut session = self.session.lock().await;
-        session
+        let mut process = self.inner.lock().await;
+        process
             .run(commands, window, return_screenshot, screenshot_delay_ms)
             .await
     }
@@ -161,23 +161,23 @@ impl SessionManager {
         path: Option<&Path>,
         window: Option<u64>,
     ) -> Result<Screenshot, SessionError> {
-        let mut session = self.session.lock().await;
-        session.screenshot(path, window).await
+        let mut process = self.inner.lock().await;
+        process.screenshot(path, window).await
     }
 
     pub async fn list(&self) -> Result<Vec<WindowInfo>, SessionError> {
-        let mut session = self.session.lock().await;
-        session.list().await
+        let mut process = self.inner.lock().await;
+        process.list().await
     }
 
     pub async fn shutdown(&self) {
-        let mut session = self.session.lock().await;
-        session.shutdown().await;
+        let mut process = self.inner.lock().await;
+        process.shutdown().await;
     }
 }
 
 #[derive(Debug)]
-struct Session {
+struct AutoWcProcess {
     child: Child,
     stdin: tokio::process::ChildStdin,
     stdout: Lines<BufReader<ChildStdout>>,
@@ -185,8 +185,8 @@ struct Session {
     exit_status: Option<ExitStatus>,
 }
 
-impl Session {
-    async fn spawn(config: SessionConfig) -> Result<Self, SessionError> {
+impl AutoWcProcess {
+    async fn spawn(config: AutoWcSessionConfig) -> Result<Self, SessionError> {
         let mut command = Command::new(&config.autowc_binary);
         command
             .args(autowc_args(&config))
@@ -449,7 +449,7 @@ impl Session {
     }
 }
 
-impl Drop for Session {
+impl Drop for AutoWcProcess {
     fn drop(&mut self) {
         self.refresh_exit_status();
         if self.exit_status.is_none() {
@@ -458,7 +458,7 @@ impl Drop for Session {
     }
 }
 
-fn autowc_args(config: &SessionConfig) -> Vec<String> {
+fn autowc_args(config: &AutoWcSessionConfig) -> Vec<String> {
     let output_sizing =
         resolve_output_sizing(config).expect("invalid AutoWC session output sizing");
     let mut args = vec!["--json".into()];
@@ -502,7 +502,7 @@ struct OutputSizing {
     dynamic_resize: bool,
 }
 
-fn resolve_output_sizing(config: &SessionConfig) -> Result<OutputSizing, SessionError> {
+fn resolve_output_sizing(config: &AutoWcSessionConfig) -> Result<OutputSizing, SessionError> {
     let has_width = config.width.is_some();
     let has_height = config.height.is_some();
 
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn builds_launch_args_with_timing_options() {
-        let args = autowc_args(&SessionConfig {
+        let args = autowc_args(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["gtk4-demo".into()],
             width: Some(800),
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn omits_unset_launch_timing_options() {
-        let args = autowc_args(&SessionConfig {
+        let args = autowc_args(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["foot".into()],
             width: None,
@@ -889,7 +889,7 @@ mod tests {
 
     #[test]
     fn builds_dynamic_launch_args_when_requested_explicitly() {
-        let args = autowc_args(&SessionConfig {
+        let args = autowc_args(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["foot".into()],
             width: None,
@@ -907,7 +907,7 @@ mod tests {
 
     #[test]
     fn rejects_partial_launch_size() {
-        let err = resolve_output_sizing(&SessionConfig {
+        let err = resolve_output_sizing(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["foot".into()],
             width: Some(1280),
@@ -926,7 +926,7 @@ mod tests {
 
     #[test]
     fn rejects_dynamic_resize_with_explicit_launch_size() {
-        let err = resolve_output_sizing(&SessionConfig {
+        let err = resolve_output_sizing(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["foot".into()],
             width: Some(1280),

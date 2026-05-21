@@ -12,14 +12,15 @@ use serde_json::json;
 use crate::{
     command::AutomationCommand,
     session::{
-        RunError, RunOutcome, Screenshot, SessionConfig, SessionError, SessionManager, WindowInfo,
+        AutoWcSession, AutoWcSessionConfig, RunError, RunOutcome, Screenshot, SessionError,
+        WindowInfo,
     },
 };
 
 const DEFAULT_SCREENSHOT_DELAY_MS: u64 = 500;
 
 const SERVER_INSTRUCTIONS: &str = "\
-AutoWC runs applications inside nested compositor sessions for GUI automation.
+AutoWC runs applications inside a nested compositor session for GUI automation.
 
 Typical flow:
 1. `launch` starts a process inside the server's running AutoWC compositor.
@@ -39,7 +40,7 @@ If AutoWC exits, later tool calls return ok=false with the captured stderr log."
 
 #[derive(Debug, Clone)]
 pub struct AutoWcMcpServer {
-    sessions: SessionManager,
+    session: AutoWcSession,
     tool_router: ToolRouter<Self>,
 }
 
@@ -55,7 +56,7 @@ impl ServerHandler for AutoWcMcpServer {
 #[tool_router(router = tool_router)]
 impl AutoWcMcpServer {
     pub async fn new(autowc_binary: PathBuf) -> Result<Self, SessionError> {
-        let sessions = SessionManager::new(SessionConfig {
+        let session = AutoWcSession::new(AutoWcSessionConfig {
             autowc_binary,
             command: vec!["true".into()],
             width: None,
@@ -70,13 +71,13 @@ impl AutoWcMcpServer {
         .await?;
 
         Ok(Self {
-            sessions,
+            session,
             tool_router: Self::tool_router(),
         })
     }
 
     pub async fn shutdown(&self) {
-        self.sessions.shutdown().await;
+        self.session.shutdown().await;
     }
 
     #[tool(
@@ -87,7 +88,7 @@ impl AutoWcMcpServer {
         &self,
         Parameters(params): Parameters<LaunchParams>,
     ) -> Result<CallToolResult, String> {
-        if let Err(err) = self.sessions.launch(&params.command).await {
+        if let Err(err) = self.session.launch(&params.command).await {
             return Ok(error_result(err));
         }
 
@@ -107,7 +108,7 @@ impl AutoWcMcpServer {
             .screenshot_delay_ms
             .unwrap_or(DEFAULT_SCREENSHOT_DELAY_MS);
         let outcome = match self
-            .sessions
+            .session
             .run(
                 &params.commands,
                 params.window,
@@ -132,7 +133,7 @@ impl AutoWcMcpServer {
         Parameters(params): Parameters<ScreenshotParams>,
     ) -> Result<CallToolResult, String> {
         let screenshot = match self
-            .sessions
+            .session
             .screenshot(params.path.as_deref(), params.window)
             .await
         {
@@ -151,7 +152,7 @@ impl AutoWcMcpServer {
         &self,
         Parameters(_params): Parameters<ListParams>,
     ) -> Result<CallToolResult, String> {
-        let windows = match self.sessions.list().await {
+        let windows = match self.session.list().await {
             Ok(windows) => windows,
             Err(err) => return Ok(error_result(err)),
         };
