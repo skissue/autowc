@@ -2,7 +2,7 @@ use std::{ffi::OsString, path::PathBuf};
 
 use serde::Deserialize;
 
-use crate::input::keyboard::key_to_code;
+use crate::input::keyboard::{key_to_code, keys_sequence::parse_keys_sequence};
 
 use super::{parse_button, ControlCommand, ControlCommandVariant, PressAction, BTN_LEFT};
 
@@ -41,6 +41,9 @@ enum JsonControlCommandVariant {
     },
     Text {
         text: String,
+    },
+    Keys {
+        keys: String,
     },
     MouseMove {
         x: f64,
@@ -96,6 +99,9 @@ impl JsonControlCommand {
                 ControlCommandVariant::Chord { codes }
             }
             JsonControlCommandVariant::Text { text } => ControlCommandVariant::Text(text),
+            JsonControlCommandVariant::Keys { keys } => ControlCommandVariant::KeysSequence {
+                actions: parse_keys_sequence(&keys)?,
+            },
             JsonControlCommandVariant::MouseMove { x, y } => {
                 ControlCommandVariant::PointerMove { x, y }
             }

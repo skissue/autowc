@@ -10,12 +10,19 @@ use smithay::{
 };
 
 use crate::{
-    control::{text_to_key_events, ControlCommand, ControlCommandVariant},
+    control::{text_to_key_events, ControlCommand, ControlCommandVariant, PressAction},
+    input::keyboard::keys_sequence::KeysSequenceAction,
     protocol::ControlResponse,
     state::{AutoWC, ControlResponseHandle, QueuedControlAction, QueuedControlActionKind},
     window::AutoWindowId,
 };
 use tracing::{debug, trace};
+
+enum PreparedKeysSequenceAction {
+    TextEvents(Vec<(u32, PressAction)>),
+    Chord(Vec<u32>),
+    Wait(Duration),
+}
 
 impl AutoWC {
     pub fn process_control_command(
@@ -85,61 +92,10 @@ impl AutoWC {
 
         match command.variant {
             ControlCommandVariant::Key { code, action } => {
-                for state in action.key_states() {
-                    self.queue_control_action(
-                        window_id,
-                        response,
-                        QueuedControlActionKind::Key {
-                            code,
-                            state: *state,
-                        },
-                    );
-                    self.queue_control_action(
-                        window_id,
-                        response,
-                        QueuedControlActionKind::Delay(self.key_event_interval),
-                    );
-                }
+                self.queue_key_press_action(window_id, response, code, action);
             }
             ControlCommandVariant::Chord { codes } => {
-                let mut pressed_codes = codes.iter().peekable();
-                while let Some(code) = pressed_codes.next() {
-                    self.queue_control_action(
-                        window_id,
-                        response,
-                        QueuedControlActionKind::Key {
-                            code: *code,
-                            state: KeyState::Pressed,
-                        },
-                    );
-                    if pressed_codes.peek().is_some() {
-                        self.queue_control_action(
-                            window_id,
-                            response,
-                            QueuedControlActionKind::Delay(self.chord_key_interval),
-                        );
-                    }
-                }
-                self.queue_control_action(
-                    window_id,
-                    response,
-                    QueuedControlActionKind::Delay(self.chord_hold_duration),
-                );
-                for code in codes.iter().rev() {
-                    self.queue_control_action(
-                        window_id,
-                        response,
-                        QueuedControlActionKind::Key {
-                            code: *code,
-                            state: KeyState::Released,
-                        },
-                    );
-                }
-                self.queue_control_action(
-                    window_id,
-                    response,
-                    QueuedControlActionKind::Delay(self.key_event_interval),
-                );
+                self.queue_chord_codes(window_id, response, &codes);
             }
             ControlCommandVariant::Text(text) => {
                 let events = match text_to_key_events(&text) {
@@ -149,21 +105,31 @@ impl AutoWC {
                         return;
                     }
                 };
-                for (code, action) in events {
-                    for state in action.key_states() {
-                        self.queue_control_action(
-                            window_id,
-                            response,
-                            QueuedControlActionKind::Key {
-                                code,
-                                state: *state,
-                            },
-                        );
-                        self.queue_control_action(
-                            window_id,
-                            response,
-                            QueuedControlActionKind::Delay(self.key_event_interval),
-                        );
+                self.queue_text_key_events(window_id, response, events);
+            }
+            ControlCommandVariant::KeysSequence { actions } => {
+                let actions = match prepare_keys_sequence_actions(actions) {
+                    Ok(actions) => actions,
+                    Err(err) => {
+                        self.complete_control_response(response, ControlResponse::Error(err));
+                        return;
+                    }
+                };
+                for action in actions {
+                    match action {
+                        PreparedKeysSequenceAction::TextEvents(events) => {
+                            self.queue_text_key_events(window_id, response, events);
+                        }
+                        PreparedKeysSequenceAction::Chord(codes) => {
+                            self.queue_chord_codes(window_id, response, &codes);
+                        }
+                        PreparedKeysSequenceAction::Wait(duration) => {
+                            self.queue_control_action(
+                                window_id,
+                                response,
+                                QueuedControlActionKind::Delay(duration),
+                            );
+                        }
                     }
                 }
             }
@@ -345,6 +311,87 @@ impl AutoWC {
         });
     }
 
+    fn queue_key_press_action(
+        &mut self,
+        window_id: AutoWindowId,
+        response: ControlResponseHandle,
+        code: u32,
+        action: PressAction,
+    ) {
+        for state in action.key_states() {
+            self.queue_control_action(
+                window_id,
+                response,
+                QueuedControlActionKind::Key {
+                    code,
+                    state: *state,
+                },
+            );
+            self.queue_control_action(
+                window_id,
+                response,
+                QueuedControlActionKind::Delay(self.key_event_interval),
+            );
+        }
+    }
+
+    fn queue_chord_codes(
+        &mut self,
+        window_id: AutoWindowId,
+        response: ControlResponseHandle,
+        codes: &[u32],
+    ) {
+        let mut pressed_codes = codes.iter().peekable();
+        while let Some(code) = pressed_codes.next() {
+            self.queue_control_action(
+                window_id,
+                response,
+                QueuedControlActionKind::Key {
+                    code: *code,
+                    state: KeyState::Pressed,
+                },
+            );
+            if pressed_codes.peek().is_some() {
+                self.queue_control_action(
+                    window_id,
+                    response,
+                    QueuedControlActionKind::Delay(self.chord_key_interval),
+                );
+            }
+        }
+        self.queue_control_action(
+            window_id,
+            response,
+            QueuedControlActionKind::Delay(self.chord_hold_duration),
+        );
+        for code in codes.iter().rev() {
+            self.queue_control_action(
+                window_id,
+                response,
+                QueuedControlActionKind::Key {
+                    code: *code,
+                    state: KeyState::Released,
+                },
+            );
+        }
+        self.queue_control_action(
+            window_id,
+            response,
+            QueuedControlActionKind::Delay(self.key_event_interval),
+        );
+    }
+
+    fn queue_text_key_events(
+        &mut self,
+        window_id: AutoWindowId,
+        response: ControlResponseHandle,
+        events: impl IntoIterator<Item = (u32, PressAction)>,
+    ) {
+        for (code, action) in events {
+            self.queue_key_press_action(window_id, response, code, action);
+        }
+    }
+
     pub fn process_virtual_input_event(
         &mut self,
         window_id: AutoWindowId,
@@ -433,4 +480,22 @@ impl AutoWC {
         pointer.axis(self, frame);
         pointer.frame(self);
     }
+}
+
+fn prepare_keys_sequence_actions(
+    actions: Vec<KeysSequenceAction>,
+) -> Result<Vec<PreparedKeysSequenceAction>, String> {
+    let mut prepared = Vec::with_capacity(actions.len());
+    for action in actions {
+        prepared.push(match action {
+            KeysSequenceAction::Text(text) => {
+                PreparedKeysSequenceAction::TextEvents(text_to_key_events(&text)?)
+            }
+            KeysSequenceAction::Chord(codes) => PreparedKeysSequenceAction::Chord(codes),
+            KeysSequenceAction::Wait { duration_ms } => {
+                PreparedKeysSequenceAction::Wait(Duration::from_millis(duration_ms))
+            }
+        });
+    }
+    Ok(prepared)
 }

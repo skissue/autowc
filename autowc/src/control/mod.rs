@@ -2,7 +2,7 @@ use std::{ffi::OsString, path::PathBuf};
 
 use smithay::backend::input::{ButtonState, KeyState};
 
-use crate::input::keyboard::key_to_code;
+use crate::input::keyboard::{key_to_code, keys_sequence::KeysSequenceAction};
 
 mod json;
 mod plain;
@@ -53,6 +53,7 @@ pub enum ControlCommandVariant {
     Key { code: u32, action: PressAction },
     Chord { codes: Vec<u32> },
     Text(String),
+    KeysSequence { actions: Vec<KeysSequenceAction> },
     PointerMove { x: f64, y: f64 },
     PointerButton { button: u32, action: PressAction },
     Click { x: f64, y: f64, button: u32 },
@@ -212,6 +213,7 @@ fn char_to_key(ch: char) -> Option<(u32, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::keyboard::keys_sequence::KeysSequenceAction;
 
     fn command(variant: ControlCommandVariant) -> Option<ControlCommand> {
         Some(ControlCommand::new(variant))
@@ -480,6 +482,21 @@ mod tests {
             parse_json_control_command(r#"{"type":"text","text":" hello\nworld "}"#).unwrap(),
             ControlCommandVariant::Text(" hello\nworld ".to_string())
         );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"keys","keys":"<C-l>example.org<RET><w:500>"}"#)
+                .unwrap(),
+            ControlCommandVariant::KeysSequence {
+                actions: vec![
+                    KeysSequenceAction::Chord(vec![
+                        key_to_code("ControlLeft").unwrap(),
+                        key_to_code("KeyL").unwrap(),
+                    ]),
+                    KeysSequenceAction::Text("example.org".to_string()),
+                    KeysSequenceAction::Chord(vec![key_to_code("Enter").unwrap()]),
+                    KeysSequenceAction::Wait { duration_ms: 500 },
+                ],
+            }
+        );
     }
 
     #[test]
@@ -590,6 +607,7 @@ mod tests {
     fn rejects_invalid_json_input() {
         assert!(parse_json_control_command(r#"{"type":"key","key":"KeyNope"}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"chord","keys":[]}"#).is_err());
+        assert!(parse_json_control_command(r#"{"type":"keys","keys":"<C-"}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"launch","command":[]}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"mouse_button","action":"tap"}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"sleep","ms":-1}"#).is_err());
