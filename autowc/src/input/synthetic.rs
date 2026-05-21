@@ -20,6 +20,9 @@ impl AutoWC {
         if let ControlCommandVariant::Launch { command } = &command.variant {
             return self.launch_child(command);
         }
+        if command.variant == ControlCommandVariant::List {
+            return Ok(());
+        }
 
         let window_id = match command.window {
             Some(window) => {
@@ -151,6 +154,7 @@ impl AutoWC {
                 );
             }
             ControlCommandVariant::Launch { .. } => unreachable!("launch is handled immediately"),
+            ControlCommandVariant::List => unreachable!("list is handled by the protocol layer"),
             ControlCommandVariant::Quit => {
                 self.queue_control_action(window_id, QueuedControlActionKind::Quit);
             }

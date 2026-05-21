@@ -34,6 +34,10 @@ impl Protocol {
         send(self.format_screenshot(path));
     }
 
+    pub fn send_window_list(self, windows: &[WindowInfo]) {
+        send(self.format_window_list(windows));
+    }
+
     pub fn format_ok(self) -> String {
         match self {
             Self::Plain => "ok".into(),
@@ -76,6 +80,13 @@ impl Protocol {
             }),
         }
     }
+
+    pub fn format_window_list(self, windows: &[WindowInfo]) -> String {
+        match self {
+            Self::Plain => "ok".into(),
+            Self::Json => serialize_response(&WindowListResponse { ok: true, windows }),
+        }
+    }
 }
 
 pub fn send(line: impl AsRef<str>) {
@@ -113,6 +124,12 @@ struct ScreenshotResponse<'a> {
     #[serde(rename = "type")]
     response_type: &'a str,
     path: &'a str,
+}
+
+#[derive(Serialize)]
+struct WindowListResponse<'a> {
+    ok: bool,
+    windows: &'a [WindowInfo],
 }
 
 fn serialize_response<T: Serialize>(response: &T) -> String {
@@ -157,6 +174,13 @@ mod tests {
         assert_eq!(
             Protocol::Json.format_screenshot("/tmp/autowc.png"),
             r#"{"ok":true,"type":"screenshot","path":"/tmp/autowc.png"}"#
+        );
+        assert_eq!(
+            Protocol::Json.format_window_list(&[WindowInfo {
+                id: 2,
+                title: "GTK Demo".to_string(),
+            }]),
+            r#"{"ok":true,"windows":[{"id":2,"title":"GTK Demo"}]}"#
         );
     }
 }

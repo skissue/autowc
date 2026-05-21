@@ -4,7 +4,10 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::{AutoWC, EventLoop};
+use crate::{
+    control::ControlCommandVariant,
+    AutoWC, EventLoop,
+};
 use smithay::reexports::calloop::{self, channel::Event};
 
 pub fn init_stdin(
@@ -20,6 +23,12 @@ pub fn init_stdin(
 
             match protocol.parse_control_command(&msg) {
                 Ok(Some(command)) => {
+                    if command.variant == ControlCommandVariant::List {
+                        let windows = state.window_infos();
+                        protocol.send_window_list(&windows);
+                        return;
+                    }
+
                     let responds_with_screenshot = command.responds_with_screenshot();
                     let before_windows = state
                         .mapped_window_ids()

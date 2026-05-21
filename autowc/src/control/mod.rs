@@ -64,6 +64,7 @@ pub enum ControlCommandVariant {
     Screenshot { path: Option<PathBuf> },
     Sleep { duration_ms: u64 },
     Launch { command: Vec<String> },
+    List,
     Quit,
 }
 
@@ -522,6 +523,10 @@ mod tests {
             ControlCommandVariant::Launch {
                 command: vec!["gtk4-demo".to_string()],
             }
+        );
+        assert_eq!(
+            parse_json_control_command(r#"{"type":"list"}"#).unwrap(),
+            ControlCommandVariant::List
         );
         assert_eq!(
             parse_json_control_command(r#"{"type":"screenshot","path":"/tmp/autowc.png"}"#)

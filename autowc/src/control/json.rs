@@ -71,6 +71,7 @@ enum JsonControlCommandVariant {
     Launch {
         command: Vec<String>,
     },
+    List,
     Quit,
 }
 
@@ -125,6 +126,7 @@ impl JsonControlCommand {
                 }
                 ControlCommandVariant::Launch { command }
             }
+            JsonControlCommandVariant::List => ControlCommandVariant::List,
             JsonControlCommandVariant::Quit => ControlCommandVariant::Quit,
         };
         ControlCommand::targeted(self.window, variant)

@@ -721,6 +721,16 @@ impl AutoWC {
         })
     }
 
+    pub fn window_infos(&self) -> Vec<WindowInfo> {
+        let mut windows = self
+            .mapped_window_ids()
+            .into_iter()
+            .filter_map(|window_id| self.window_info(window_id))
+            .collect::<Vec<_>>();
+        windows.sort_by_key(|window| window.id);
+        windows
+    }
+
     fn overlay_windows(&self, window_id: AutoWindowId) -> Vec<Window> {
         self.windows
             .get(window_id)
