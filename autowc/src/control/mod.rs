@@ -359,6 +359,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_list() {
+        assert_eq!(
+            parse_control_command("list").unwrap(),
+            command(ControlCommandVariant::List)
+        );
+        assert!(parse_control_command("list extra").is_err());
+    }
+
+    #[test]
     fn parses_text_with_spaces() {
         assert_eq!(
             parse_control_command("text hello world").unwrap(),

@@ -83,7 +83,11 @@ impl Protocol {
 
     pub fn format_window_list(self, windows: &[WindowInfo]) -> String {
         match self {
-            Self::Plain => "ok".into(),
+            Self::Plain => windows
+                .iter()
+                .map(|window| format!("{} \"{}\"", window.id, window.title))
+                .collect::<Vec<_>>()
+                .join(" "),
             Self::Json => serialize_response(&WindowListResponse { ok: true, windows }),
         }
     }
@@ -149,6 +153,19 @@ mod tests {
                 title: "GTK Demo".to_string(),
             }]),
             "ok 2 GTK Demo"
+        );
+        assert_eq!(
+            Protocol::Plain.format_window_list(&[
+                WindowInfo {
+                    id: 2,
+                    title: "GTK Demo".to_string(),
+                },
+                WindowInfo {
+                    id: 3,
+                    title: "Dialog".to_string(),
+                },
+            ]),
+            "2 \"GTK Demo\" 3 \"Dialog\""
         );
         assert_eq!(Protocol::Plain.format_error("bad input"), "error bad input");
         assert_eq!(
