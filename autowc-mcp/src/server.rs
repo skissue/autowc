@@ -110,6 +110,7 @@ impl AutoWcMcpServer {
             .run(
                 &params.session_id,
                 &params.commands,
+                params.window,
                 return_screenshot,
                 screenshot_delay_ms,
             )
@@ -132,7 +133,7 @@ impl AutoWcMcpServer {
     ) -> Result<CallToolResult, String> {
         let screenshot = match self
             .sessions
-            .screenshot(&params.session_id, params.path.as_deref())
+            .screenshot(&params.session_id, params.path.as_deref(), params.window)
             .await
         {
             Ok(screenshot) => screenshot,
@@ -227,6 +228,10 @@ pub struct RunParams {
     )]
     pub commands: Vec<AutomationCommand>,
     #[schemars(
+        description = "Optional AutoWC window id to target for every command in this batch and for the returned screenshot. Omit to use AutoWC's default window."
+    )]
+    pub window: Option<u64>,
+    #[schemars(
         description = "Whether to return an inline screenshot after the batch completes. Defaults to true."
     )]
     pub return_screenshot: Option<bool>,
@@ -244,6 +249,10 @@ pub struct ScreenshotParams {
         description = "Optional PNG output path. When omitted, AutoWC writes to a temporary file; the MCP result includes the image inline either way."
     )]
     pub path: Option<PathBuf>,
+    #[schemars(
+        description = "Optional AutoWC window id to capture. Omit to use AutoWC's default window."
+    )]
+    pub window: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -399,6 +408,7 @@ mod tests {
 
         assert!(schema.contains("Ordered automation command batch"));
         assert!(schema.contains("key, chord, text"));
+        assert!(schema.contains("Optional AutoWC window id"));
         assert!(schema.contains("Defaults to true"));
         assert!(schema.contains("Defaults to 500"));
     }
@@ -411,6 +421,7 @@ mod tests {
         assert!(schema.contains("Optional PNG output path"));
         assert!(schema.contains("temporary file"));
         assert!(schema.contains("image inline"));
+        assert!(schema.contains("Optional AutoWC window id"));
     }
 
     #[test]

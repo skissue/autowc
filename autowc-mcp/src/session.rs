@@ -152,13 +152,14 @@ impl SessionManager {
         &self,
         session_id: &str,
         commands: &[AutomationCommand],
+        window: Option<u64>,
         return_screenshot: bool,
         screenshot_delay_ms: u64,
     ) -> Result<RunOutcome, RunError> {
         let session = self.get_session(session_id).await.map_err(RunError::new)?;
         let mut session = session.lock().await;
         session
-            .run(commands, return_screenshot, screenshot_delay_ms)
+            .run(commands, window, return_screenshot, screenshot_delay_ms)
             .await
     }
 
@@ -166,10 +167,11 @@ impl SessionManager {
         &self,
         session_id: &str,
         path: Option<&Path>,
+        window: Option<u64>,
     ) -> Result<Screenshot, SessionError> {
         let session = self.get_session(session_id).await?;
         let mut session = session.lock().await;
-        session.screenshot(path, true).await
+        session.screenshot(path, window, true).await
     }
 
     pub async fn list(&self, session_id: &str) -> Result<Vec<WindowInfo>, SessionError> {
@@ -245,6 +247,7 @@ impl Session {
     async fn run(
         &mut self,
         commands: &[AutomationCommand],
+        window: Option<u64>,
         return_screenshot: bool,
         screenshot_delay_ms: u64,
     ) -> Result<RunOutcome, RunError> {
@@ -252,18 +255,18 @@ impl Session {
         let mut commands_executed = 0;
 
         for command in commands {
-            let line = match command.to_autowc_line().map_err(SessionError::new) {
+            let line = match command.to_autowc_line(window).map_err(SessionError::new) {
                 Ok(line) => line,
                 Err(error) => {
                     return Err(self
-                        .run_error(commands_executed, error, return_screenshot)
+                        .run_error(commands_executed, error, window, return_screenshot)
                         .await)
                 }
             };
 
             if let Err(error) = self.write_command_and_expect_ok(&line).await {
                 return Err(self
-                    .run_error(commands_executed, error, return_screenshot)
+                    .run_error(commands_executed, error, window, return_screenshot)
                     .await);
             }
 
@@ -277,7 +280,7 @@ impl Session {
         // Use a screenshot as a protocol sync point even when the caller does
         // not want the image back; otherwise command errors could remain unread.
         let screenshot = self
-            .screenshot(None, return_screenshot)
+            .screenshot(None, window, return_screenshot)
             .await
             .map_err(|error| RunError {
                 error,
@@ -295,10 +298,11 @@ impl Session {
         &mut self,
         commands_executed: usize,
         error: SessionError,
+        window: Option<u64>,
         return_screenshot: bool,
     ) -> RunError {
         let screenshot = if return_screenshot {
-            self.screenshot(None, true).await.ok()
+            self.screenshot(None, window, true).await.ok()
         } else {
             None
         };
@@ -326,10 +330,11 @@ impl Session {
     async fn screenshot(
         &mut self,
         path: Option<&Path>,
+        window: Option<u64>,
         include_data: bool,
     ) -> Result<Screenshot, SessionError> {
         self.ensure_running().await?;
-        let line = screenshot_line(path).map_err(SessionError::new)?;
+        let line = screenshot_line(path, window).map_err(SessionError::new)?;
         self.write_line(&line).await?;
 
         loop {

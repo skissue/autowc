@@ -68,8 +68,8 @@ pub enum AutomationCommand {
 }
 
 impl AutomationCommand {
-    pub fn to_autowc_line(&self) -> Result<String, String> {
-        let value = match self {
+    pub fn to_autowc_line(&self, window: Option<u64>) -> Result<String, String> {
+        let mut value = match self {
             Self::Key { key, action } => {
                 if key.trim().is_empty() || key.split_whitespace().count() != 1 {
                     return Err("key must be one non-empty token".into());
@@ -124,6 +124,10 @@ impl AutomationCommand {
                 "ms": ms,
             }),
         };
+
+        if let Some(window) = window {
+            value["window"] = serde_json::json!(window);
+        }
 
         serde_json::to_string(&value).map_err(|err| err.to_string())
     }
@@ -204,8 +208,8 @@ pub enum NamedMouseButton {
     Middle,
 }
 
-pub fn screenshot_line(path: Option<&Path>) -> Result<String, String> {
-    let value = if let Some(path) = path {
+pub fn screenshot_line(path: Option<&Path>, window: Option<u64>) -> Result<String, String> {
+    let mut value = if let Some(path) = path {
         let path = path
             .to_str()
             .ok_or_else(|| "screenshot path must be valid UTF-8".to_string())?;
@@ -218,6 +222,10 @@ pub fn screenshot_line(path: Option<&Path>) -> Result<String, String> {
             "type": "screenshot",
         })
     };
+
+    if let Some(window) = window {
+        value["window"] = serde_json::json!(window);
+    }
 
     serde_json::to_string(&value).map_err(|err| err.to_string())
 }
@@ -238,8 +246,21 @@ mod tests {
         };
 
         assert_eq!(
-            command.to_autowc_line().unwrap(),
+            command.to_autowc_line(None).unwrap(),
             r#"{"action":"press","key":"KeyA","type":"key"}"#
+        );
+    }
+
+    #[test]
+    fn serializes_top_level_window_target() {
+        let command = AutomationCommand::Key {
+            key: "KeyA".into(),
+            action: KeyAction::default(),
+        };
+
+        assert_eq!(
+            command.to_autowc_line(Some(2)).unwrap(),
+            r#"{"action":"press","key":"KeyA","type":"key","window":2}"#
         );
     }
 
@@ -251,7 +272,7 @@ mod tests {
         };
 
         assert_eq!(
-            command.to_autowc_line().unwrap(),
+            command.to_autowc_line(None).unwrap(),
             r#"{"action":"press","button":"left","type":"mouse_button"}"#
         );
     }
@@ -272,7 +293,7 @@ mod tests {
         };
 
         assert_eq!(
-            command.to_autowc_line().unwrap(),
+            command.to_autowc_line(None).unwrap(),
             r#"{"text":"hello\nworld","type":"text"}"#
         );
     }
@@ -283,20 +304,27 @@ mod tests {
             key: "KeyA KeyB".into(),
             action: KeyAction::Press,
         }
-        .to_autowc_line()
+        .to_autowc_line(None)
         .is_err());
         assert!(AutomationCommand::Chord { keys: vec![] }
-            .to_autowc_line()
+            .to_autowc_line(None)
             .is_err());
     }
 
     #[test]
     fn serializes_screenshot_paths_with_whitespace() {
         assert_eq!(
-            screenshot_line(Some(Path::new("/tmp/has space.png"))).unwrap(),
+            screenshot_line(Some(Path::new("/tmp/has space.png")), None).unwrap(),
             r#"{"path":"/tmp/has space.png","type":"screenshot"}"#
         );
-        assert_eq!(screenshot_line(None).unwrap(), r#"{"type":"screenshot"}"#);
+        assert_eq!(
+            screenshot_line(None, None).unwrap(),
+            r#"{"type":"screenshot"}"#
+        );
+        assert_eq!(
+            screenshot_line(None, Some(3)).unwrap(),
+            r#"{"type":"screenshot","window":3}"#
+        );
     }
 
     #[test]
