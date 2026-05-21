@@ -25,10 +25,10 @@ use smithay::{
     },
     utils::{Logical, Physical, Point, Rectangle, Size, SERIAL_COUNTER},
     wayland::{
-        compositor::{CompositorClientState, CompositorState},
+        compositor::{with_states, CompositorClientState, CompositorState},
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
-        shell::xdg::XdgShellState,
+        shell::xdg::{XdgShellState, XdgToplevelSurfaceData},
         shm::ShmState,
         socket::ListeningSocketSource,
     },
@@ -36,7 +36,7 @@ use smithay::{
 
 use crate::{
     host::HostWindowRequester,
-    protocol::Protocol,
+    protocol::{Protocol, WindowInfo},
     window::{AutoWindowId, AutoWindowState, WindowRegistry},
 };
 
@@ -699,6 +699,26 @@ impl AutoWC {
 
     pub fn mapped_windows(&self) -> Vec<Window> {
         self.windows.mapped_windows()
+    }
+
+    pub fn mapped_window_ids(&self) -> Vec<AutoWindowId> {
+        self.windows.mapped_ids()
+    }
+
+    pub fn window_info(&self, window_id: AutoWindowId) -> Option<WindowInfo> {
+        let window = self.windows.get(window_id)?.primary_window()?;
+        let surface = window.toplevel().unwrap().wl_surface();
+        let title = with_states(surface, |states| {
+            states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .and_then(|data| data.lock().unwrap().title.clone())
+                .unwrap_or_default()
+        });
+        Some(WindowInfo {
+            id: window_id.raw(),
+            title,
+        })
     }
 
     fn overlay_windows(&self, window_id: AutoWindowId) -> Vec<Window> {

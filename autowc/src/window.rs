@@ -80,6 +80,14 @@ impl WindowRegistry {
             .min_by_key(|id| id.raw())
     }
 
+    pub fn mapped_ids(&self) -> Vec<AutoWindowId> {
+        self.windows
+            .values()
+            .filter(|window| window.state() == AutoWindowState::Mapped && !window.is_empty())
+            .map(AutoWindow::id)
+            .collect()
+    }
+
     pub fn mapped_windows(&self) -> Vec<Window> {
         self.windows
             .values()

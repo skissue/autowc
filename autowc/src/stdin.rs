@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     io,
     thread::{self, JoinHandle},
 };
@@ -20,10 +21,20 @@ pub fn init_stdin(
             match protocol.parse_control_command(&msg) {
                 Ok(Some(command)) => {
                     let responds_with_screenshot = command.responds_with_screenshot();
+                    let before_windows = state
+                        .mapped_window_ids()
+                        .into_iter()
+                        .collect::<HashSet<_>>();
                     if let Err(err) = state.process_control_command(command) {
                         protocol.send_error(err);
                     } else if !responds_with_screenshot {
-                        protocol.send_ok();
+                        let new_windows = state
+                            .mapped_window_ids()
+                            .into_iter()
+                            .filter(|window_id| !before_windows.contains(window_id))
+                            .filter_map(|window_id| state.window_info(window_id))
+                            .collect::<Vec<_>>();
+                        protocol.send_ok_with_new_windows(&new_windows);
                     }
                 }
                 Ok(None) => {}
