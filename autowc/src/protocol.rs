@@ -22,10 +22,6 @@ impl Protocol {
         send(self.format_ok());
     }
 
-    pub fn send_ok_with_new_windows(self, new_windows: &[WindowInfo]) {
-        send(self.format_ok_with_new_windows(new_windows));
-    }
-
     pub fn send_error(self, error: impl AsRef<str>) {
         send(self.format_error(error));
     }
@@ -42,22 +38,6 @@ impl Protocol {
         match self {
             Self::Plain => "ok".into(),
             Self::Json => serialize_response(&OkResponse { ok: true }),
-        }
-    }
-
-    pub fn format_ok_with_new_windows(self, new_windows: &[WindowInfo]) -> String {
-        match self {
-            Self::Plain => {
-                let mut response = String::from("ok");
-                for window in new_windows {
-                    response.push_str(&format!(" {} {}", window.id, window.title));
-                }
-                response
-            }
-            Self::Json => serialize_response(&OkWithNewWindowsResponse {
-                ok: true,
-                new_windows,
-            }),
         }
     }
 
@@ -111,12 +91,6 @@ struct OkResponse {
 }
 
 #[derive(Serialize)]
-struct OkWithNewWindowsResponse<'a> {
-    ok: bool,
-    new_windows: &'a [WindowInfo],
-}
-
-#[derive(Serialize)]
 struct ErrorResponse<'a> {
     ok: bool,
     error: &'a str,
@@ -148,13 +122,6 @@ mod tests {
     fn formats_plain_responses() {
         assert_eq!(Protocol::Plain.format_ok(), "ok");
         assert_eq!(
-            Protocol::Plain.format_ok_with_new_windows(&[WindowInfo {
-                id: 2,
-                title: "GTK Demo".to_string(),
-            }]),
-            "ok 2 GTK Demo"
-        );
-        assert_eq!(
             Protocol::Plain.format_window_list(&[
                 WindowInfo {
                     id: 2,
@@ -177,13 +144,6 @@ mod tests {
     #[test]
     fn formats_json_responses() {
         assert_eq!(Protocol::Json.format_ok(), r#"{"ok":true}"#);
-        assert_eq!(
-            Protocol::Json.format_ok_with_new_windows(&[WindowInfo {
-                id: 2,
-                title: "GTK Demo".to_string(),
-            }]),
-            r#"{"ok":true,"new_windows":[{"id":2,"title":"GTK Demo"}]}"#
-        );
         assert_eq!(
             Protocol::Json.format_error("bad \"input\""),
             r#"{"ok":false,"error":"bad \"input\""}"#
