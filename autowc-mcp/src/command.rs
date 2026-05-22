@@ -55,11 +55,13 @@ pub enum AutomationCommand {
         #[serde(default)]
         button: MouseButton,
     },
-    #[schemars(description = "Send a mouse wheel scroll event.")]
+    #[schemars(
+        description = "Send a mouse wheel scroll event. Amounts are wheel detents: 1.0 is one wheel notch, 0.5 is half a notch, and 3.0 is a medium scroll."
+    )]
     Scroll {
-        #[schemars(description = "Horizontal scroll amount in wheel units.")]
+        #[schemars(description = "Horizontal scroll amount in wheel detents.")]
         dx: f64,
-        #[schemars(description = "Vertical scroll amount in wheel units.")]
+        #[schemars(description = "Vertical scroll amount in wheel detents.")]
         dy: f64,
     },
     #[schemars(description = "Pause before continuing the batch.")]
@@ -390,6 +392,8 @@ mod tests {
         assert!(schema.contains("waits 500 ms"));
         assert!(schema.contains("lowercase s for Super"));
         assert!(schema.contains("Virtual-display x coordinate"));
+        assert!(schema.contains("wheel detents"));
+        assert!(schema.contains("3.0 is a medium scroll"));
         assert!(schema.contains("Sleep duration in whole milliseconds"));
     }
 }
