@@ -50,17 +50,50 @@ impl PartialEq<ControlCommand> for ControlCommandVariant {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlCommandVariant {
-    Key { code: u32, action: PressAction },
-    Chord { codes: Vec<u32> },
+    Key {
+        code: u32,
+        action: PressAction,
+    },
+    Chord {
+        codes: Vec<u32>,
+    },
     Text(String),
-    KeysSequence { actions: Vec<KeysSequenceAction> },
-    PointerMove { x: f64, y: f64 },
-    PointerButton { button: u32, action: PressAction },
-    Click { x: f64, y: f64, button: u32 },
-    Scroll { dx: f64, dy: f64 },
-    Screenshot { path: Option<PathBuf> },
-    Sleep { duration_ms: u64 },
-    Launch { command: Vec<OsString> },
+    KeysSequence {
+        actions: Vec<KeysSequenceAction>,
+    },
+    PointerMove {
+        x: f64,
+        y: f64,
+    },
+    PointerButton {
+        button: u32,
+        action: PressAction,
+    },
+    Click {
+        x: f64,
+        y: f64,
+        button: u32,
+    },
+    PointerDrag {
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        button: u32,
+    },
+    Scroll {
+        dx: f64,
+        dy: f64,
+    },
+    Screenshot {
+        path: Option<PathBuf>,
+    },
+    Sleep {
+        duration_ms: u64,
+    },
+    Launch {
+        command: Vec<OsString>,
+    },
     List,
     Close,
     Quit,
@@ -559,6 +592,32 @@ mod tests {
             ControlCommandVariant::PointerButton {
                 button: BTN_RIGHT,
                 action: PressAction::Press,
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(
+                r#"{"type":"mouse_drag","start_x":10,"start_y":20,"end_x":30,"end_y":40}"#
+            )
+            .unwrap(),
+            ControlCommandVariant::PointerDrag {
+                start_x: 10.0,
+                start_y: 20.0,
+                end_x: 30.0,
+                end_y: 40.0,
+                button: BTN_LEFT,
+            }
+        );
+        assert_eq!(
+            parse_json_control_command(
+                r#"{"type":"mouse_drag","start_x":10,"start_y":20,"end_x":30,"end_y":40,"button":"right"}"#
+            )
+            .unwrap(),
+            ControlCommandVariant::PointerDrag {
+                start_x: 10.0,
+                start_y: 20.0,
+                end_x: 30.0,
+                end_y: 40.0,
+                button: BTN_RIGHT,
             }
         );
     }

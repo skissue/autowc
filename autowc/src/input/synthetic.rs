@@ -184,6 +184,17 @@ impl AutoWC {
                     },
                 );
             }
+            ControlCommandVariant::PointerDrag {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                button,
+            } => {
+                for kind in pointer_drag_actions(start_x, start_y, end_x, end_y, button) {
+                    self.queue_control_action(window_id, response, kind);
+                }
+            }
             ControlCommandVariant::Scroll { dx, dy } => {
                 let dx = match prepare_scroll_axis(dx, "dx") {
                     Ok(axis) => axis,
@@ -549,6 +560,30 @@ fn prepare_scroll_axis(detents: f64, name: &str) -> Result<PreparedScrollAxis, S
     })
 }
 
+fn pointer_drag_actions(
+    start_x: f64,
+    start_y: f64,
+    end_x: f64,
+    end_y: f64,
+    button: u32,
+) -> [QueuedControlActionKind; 4] {
+    [
+        QueuedControlActionKind::PointerMove {
+            x: start_x,
+            y: start_y,
+        },
+        QueuedControlActionKind::PointerButton {
+            button,
+            state: ButtonState::Pressed,
+        },
+        QueuedControlActionKind::PointerMove { x: end_x, y: end_y },
+        QueuedControlActionKind::PointerButton {
+            button,
+            state: ButtonState::Released,
+        },
+    ]
+}
+
 fn prepare_keys_sequence_actions(
     actions: Vec<KeysSequenceAction>,
 ) -> Result<Vec<PreparedKeysSequenceAction>, String> {
@@ -570,6 +605,22 @@ fn prepare_keys_sequence_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expands_pointer_drag_to_low_level_mouse_actions() {
+        let actions = pointer_drag_actions(10.0, 20.0, 30.0, 40.0, 273);
+
+        match actions {
+            [QueuedControlActionKind::PointerMove { x: 10.0, y: 20.0 }, QueuedControlActionKind::PointerButton {
+                button: 273,
+                state: ButtonState::Pressed,
+            }, QueuedControlActionKind::PointerMove { x: 30.0, y: 40.0 }, QueuedControlActionKind::PointerButton {
+                button: 273,
+                state: ButtonState::Released,
+            }] => {}
+            other => panic!("unexpected drag action expansion: {other:?}"),
+        }
+    }
 
     #[test]
     fn prepares_scroll_detents() {

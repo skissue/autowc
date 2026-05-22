@@ -59,6 +59,13 @@ enum JsonControlCommandVariant {
         y: f64,
         button: Option<JsonMouseButton>,
     },
+    MouseDrag {
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        button: Option<JsonMouseButton>,
+    },
     Scroll {
         dx: f64,
         dy: f64,
@@ -114,6 +121,19 @@ impl JsonControlCommand {
             JsonControlCommandVariant::Click { x, y, button } => ControlCommandVariant::Click {
                 x,
                 y,
+                button: parse_json_button(button)?,
+            },
+            JsonControlCommandVariant::MouseDrag {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                button,
+            } => ControlCommandVariant::PointerDrag {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
                 button: parse_json_button(button)?,
             },
             JsonControlCommandVariant::Scroll { dx, dy } => {
