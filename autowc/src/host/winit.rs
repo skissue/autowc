@@ -82,6 +82,7 @@ pub fn init_from_attributes(
             window,
             is_x11,
             scale_factor,
+            fullscreen: false,
         },
     );
 
@@ -275,6 +276,10 @@ impl HostGraphicsBackend {
         self.window(window_id).scale_factor()
     }
 
+    pub fn fullscreen(&self, window_id: WindowId) -> bool {
+        self.window(window_id).fullscreen().is_some()
+    }
+
     pub fn window(&self, window_id: WindowId) -> &WinitWindow {
         &self
             .windows
@@ -395,6 +400,7 @@ struct HostEventWindow {
     window: Arc<WinitWindow>,
     is_x11: bool,
     scale_factor: f64,
+    fullscreen: bool,
 }
 
 struct HostEventLoopApp<'a, F: FnMut(HostEvent)> {
@@ -419,6 +425,16 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
         self.inner.windows.get_mut(&window_id)
     }
 
+    fn update_fullscreen(&mut self, window_id: WindowId) -> Option<bool> {
+        let window = self.window_mut(window_id)?;
+        let fullscreen = window.window.fullscreen().is_some();
+        if window.fullscreen == fullscreen {
+            return None;
+        }
+        window.fullscreen = fullscreen;
+        Some(fullscreen)
+    }
+
     fn handle_window_request(&mut self, event_loop: &ActiveEventLoop, request: HostWindowRequest) {
         match request {
             HostWindowRequest::Create {
@@ -437,12 +453,14 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
                         window.window_handle().map(|handle| handle.as_raw()),
                         Ok(RawWindowHandle::Xlib(_))
                     );
+                    let fullscreen = window.fullscreen().is_some();
                     info!(
                         ?auto_window_id,
                         ?window_id,
                         ?size,
                         scale_factor,
                         is_x11,
+                        fullscreen,
                         "created requested host window"
                     );
                     self.inner.windows.insert(
@@ -451,6 +469,7 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
                             window: window.clone(),
                             is_x11,
                             scale_factor,
+                            fullscreen,
                         },
                     );
                     (self.callback)(HostEvent::WindowCreated {
@@ -459,6 +478,7 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
                         window,
                         size,
                         scale_factor,
+                        fullscreen,
                     });
                 }
                 Err(err) => {
@@ -500,22 +520,26 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
 
         match event {
             WindowEvent::Resized(size) => {
-                let Some(window) = self.window(window_id) else {
+                let Some(window) = self.window_mut(window_id) else {
                     return;
                 };
                 let scale_factor = window.scale_factor;
+                let fullscreen = window.window.fullscreen().is_some();
+                window.fullscreen = fullscreen;
                 let (w, h): (i32, i32) = size.into();
                 debug!(
                     ?window_id,
                     width = w,
                     height = h,
                     scale_factor,
+                    fullscreen,
                     "winit resize event"
                 );
                 (self.callback)(HostEvent::Resized {
                     window_id,
                     size: (w, h).into(),
                     scale_factor,
+                    fullscreen,
                 });
             }
             WindowEvent::ScaleFactorChanged {
@@ -527,18 +551,22 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
                 };
                 window.scale_factor = new_scale_factor;
                 let scale_factor = window.scale_factor;
+                let fullscreen = window.window.fullscreen().is_some();
+                window.fullscreen = fullscreen;
                 let (w, h): (i32, i32) = window.window.inner_size().into();
                 debug!(
                     ?window_id,
                     width = w,
                     height = h,
                     scale_factor,
+                    fullscreen,
                     "winit scale factor changed"
                 );
                 (self.callback)(HostEvent::Resized {
                     window_id,
                     size: (w, h).into(),
                     scale_factor,
+                    fullscreen,
                 });
             }
             WindowEvent::RedrawRequested => {
@@ -617,6 +645,15 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
                 trace!(?window_id, ?button, ?state, "winit mouse input");
                 (self.callback)(HostEvent::Input { window_id, event });
             }
+            WindowEvent::Moved(_) => {
+                if let Some(fullscreen) = self.update_fullscreen(window_id) {
+                    debug!(?window_id, fullscreen, "winit fullscreen changed");
+                    (self.callback)(HostEvent::FullscreenChanged {
+                        window_id,
+                        fullscreen,
+                    });
+                }
+            }
             WindowEvent::DroppedFile(_)
             | WindowEvent::Destroyed
             | WindowEvent::CursorEntered { .. }
@@ -627,7 +664,6 @@ impl<F: FnMut(HostEvent)> ApplicationHandler<HostWindowRequest> for HostEventLoo
             | WindowEvent::HoveredFile(_)
             | WindowEvent::HoveredFileCancelled
             | WindowEvent::Ime(_)
-            | WindowEvent::Moved(_)
             | WindowEvent::Occluded(_)
             | WindowEvent::DoubleTapGesture { .. }
             | WindowEvent::ThemeChanged(_)
@@ -721,6 +757,7 @@ pub enum HostEvent {
         window: Arc<WinitWindow>,
         size: Size<i32, Physical>,
         scale_factor: f64,
+        fullscreen: bool,
     },
     WindowCreateFailed {
         auto_window_id: AutoWindowId,
@@ -733,6 +770,11 @@ pub enum HostEvent {
         window_id: WindowId,
         size: Size<i32, Physical>,
         scale_factor: f64,
+        fullscreen: bool,
+    },
+    FullscreenChanged {
+        window_id: WindowId,
+        fullscreen: bool,
     },
     Focus {
         window_id: WindowId,

@@ -470,6 +470,7 @@ impl AutoWC {
         host_size: Size<i32, Physical>,
         virtual_size: Size<i32, Logical>,
         output_scale: f64,
+        fullscreen: bool,
     ) {
         let Some(window) = self
             .windows
@@ -483,23 +484,24 @@ impl AutoWC {
         self.windows
             .get_mut(window_id)
             .expect("AutoWC window is missing")
-            .set_host_window(host_window_id, host_size, virtual_size);
+            .set_host_window(host_window_id, host_size, virtual_size, fullscreen);
         info!(
             ?window_id,
             ?host_window_id,
             ?host_size,
             ?virtual_size,
             output_scale,
+            fullscreen,
             "bound host window"
         );
         self.update_window_output(window_id, host_size, virtual_size, output_scale);
 
         if self.preferred_toplevel_size(&window) == virtual_size {
-            self.configure_toplevel(&window, virtual_size);
+            self.configure_toplevel(&window, virtual_size, fullscreen);
             window.toplevel().unwrap().send_pending_configure();
             self.map_configured_window(window_id);
         } else {
-            self.configure_toplevel(&window, virtual_size);
+            self.configure_toplevel(&window, virtual_size, fullscreen);
             window.toplevel().unwrap().send_pending_configure();
             self.windows
                 .get_mut(window_id)
@@ -514,6 +516,7 @@ impl AutoWC {
         host_size: Size<i32, Physical>,
         virtual_size: Size<i32, Logical>,
         output_scale: f64,
+        fullscreen: bool,
     ) {
         if host_size.w <= 0 || host_size.h <= 0 || virtual_size.w <= 0 || virtual_size.h <= 0 {
             warn!(
@@ -529,6 +532,7 @@ impl AutoWC {
             ?host_size,
             ?virtual_size,
             output_scale,
+            fullscreen,
             "resizing window"
         );
         let auto_window = self
@@ -537,6 +541,7 @@ impl AutoWC {
             .expect("AutoWC window is missing");
         auto_window.set_host_size(host_size);
         auto_window.set_virtual_size(virtual_size);
+        auto_window.set_host_fullscreen(fullscreen);
         self.update_window_output(window_id, host_size, virtual_size, output_scale);
         let Some(window) = self
             .windows
@@ -546,7 +551,35 @@ impl AutoWC {
         else {
             return;
         };
-        self.configure_toplevel(&window, virtual_size);
+        self.configure_toplevel(&window, virtual_size, fullscreen);
+        let toplevel = window.toplevel().unwrap();
+        if toplevel.is_initial_configure_sent() {
+            toplevel.send_pending_configure();
+        }
+    }
+
+    pub fn set_window_host_fullscreen(&mut self, window_id: AutoWindowId, fullscreen: bool) {
+        let changed = self
+            .windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .set_host_fullscreen(fullscreen);
+        if !changed {
+            return;
+        }
+
+        let virtual_size = self.window_virtual_size(window_id);
+        let Some(window) = self
+            .windows
+            .get(window_id)
+            .and_then(|auto_window| auto_window.primary_window())
+            .cloned()
+        else {
+            return;
+        };
+
+        info!(?window_id, fullscreen, "updating client fullscreen state");
+        self.configure_toplevel(&window, virtual_size, fullscreen);
         let toplevel = window.toplevel().unwrap();
         if toplevel.is_initial_configure_sent() {
             toplevel.send_pending_configure();
@@ -682,14 +715,22 @@ impl AutoWC {
         });
     }
 
-    pub fn configure_toplevel(&self, window: &Window, size: Size<i32, Logical>) {
+    pub fn configure_toplevel(&self, window: &Window, size: Size<i32, Logical>, fullscreen: bool) {
         let toplevel = window.toplevel().unwrap();
         toplevel.with_pending_state(|state| {
-            state.states.unset(xdg_toplevel::State::Fullscreen);
-            state.states.set(xdg_toplevel::State::TiledLeft);
-            state.states.set(xdg_toplevel::State::TiledRight);
-            state.states.set(xdg_toplevel::State::TiledTop);
-            state.states.set(xdg_toplevel::State::TiledBottom);
+            if fullscreen {
+                state.states.set(xdg_toplevel::State::Fullscreen);
+                state.states.unset(xdg_toplevel::State::TiledLeft);
+                state.states.unset(xdg_toplevel::State::TiledRight);
+                state.states.unset(xdg_toplevel::State::TiledTop);
+                state.states.unset(xdg_toplevel::State::TiledBottom);
+            } else {
+                state.states.unset(xdg_toplevel::State::Fullscreen);
+                state.states.set(xdg_toplevel::State::TiledLeft);
+                state.states.set(xdg_toplevel::State::TiledRight);
+                state.states.set(xdg_toplevel::State::TiledTop);
+                state.states.set(xdg_toplevel::State::TiledBottom);
+            }
             state.size = Some(size);
         });
     }
@@ -833,7 +874,12 @@ impl AutoWC {
         };
 
         let virtual_size = self.window_virtual_size(window_id);
-        self.configure_toplevel(&window, virtual_size);
+        let fullscreen = self
+            .windows
+            .get(window_id)
+            .expect("AutoWC window is missing")
+            .host_fullscreen();
+        self.configure_toplevel(&window, virtual_size, fullscreen);
         self.windows
             .get_mut(window_id)
             .expect("AutoWC window is missing")

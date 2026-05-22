@@ -107,6 +107,7 @@ pub struct AutoWindow {
     // TODO: Add fixed-size presentation and pointer viewport state here when fixed sizing returns.
     host_size: Option<Size<i32, Physical>>,
     virtual_size: Option<Size<i32, Logical>>,
+    host_fullscreen: bool,
     state: AutoWindowState,
     primary_window: Option<Window>,
     overlay_windows: Vec<Window>,
@@ -121,6 +122,7 @@ impl AutoWindow {
             output: None,
             host_size: None,
             virtual_size: None,
+            host_fullscreen: false,
             state: AutoWindowState::Empty,
             primary_window: None,
             overlay_windows: Vec::new(),
@@ -159,6 +161,10 @@ impl AutoWindow {
         self.host_size
     }
 
+    pub fn host_fullscreen(&self) -> bool {
+        self.host_fullscreen
+    }
+
     pub fn state(&self) -> AutoWindowState {
         self.state
     }
@@ -187,17 +193,20 @@ impl AutoWindow {
         host_window_id: HostWindowId,
         host_size: Size<i32, Physical>,
         virtual_size: Size<i32, Logical>,
+        host_fullscreen: bool,
     ) {
         trace!(
             id = ?self.id,
             ?host_window_id,
             ?host_size,
             ?virtual_size,
+            host_fullscreen,
             "setting host window"
         );
         self.host_window_id = Some(host_window_id);
         self.host_size = Some(host_size);
         self.virtual_size = Some(virtual_size);
+        self.host_fullscreen = host_fullscreen;
     }
 
     pub fn set_host_size(&mut self, host_size: Size<i32, Physical>) {
@@ -208,6 +217,20 @@ impl AutoWindow {
     pub fn set_virtual_size(&mut self, virtual_size: Size<i32, Logical>) {
         trace!(id = ?self.id, ?virtual_size, "setting virtual size");
         self.virtual_size = Some(virtual_size);
+    }
+
+    pub fn set_host_fullscreen(&mut self, fullscreen: bool) -> bool {
+        if self.host_fullscreen == fullscreen {
+            return false;
+        }
+        debug!(
+            id = ?self.id,
+            from = self.host_fullscreen,
+            to = fullscreen,
+            "host fullscreen state changed"
+        );
+        self.host_fullscreen = fullscreen;
+        true
     }
 
     pub fn take_primary_window(&mut self) -> Option<Window> {

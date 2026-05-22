@@ -62,6 +62,7 @@ fn handle_host_event(
             window,
             size,
             scale_factor,
+            fullscreen,
         } => handle_window_created(
             state,
             backend,
@@ -71,6 +72,7 @@ fn handle_host_event(
             window,
             size,
             scale_factor,
+            fullscreen,
         ),
         HostEvent::WindowCreateFailed {
             auto_window_id,
@@ -87,10 +89,24 @@ fn handle_host_event(
             window_id,
             size,
             scale_factor,
+            fullscreen,
             ..
         } => {
-            debug!(?window_id, ?size, scale_factor, "host window resized");
-            render_windows.resize_host_window(state, window_id, size, scale_factor);
+            debug!(
+                ?window_id,
+                ?size,
+                scale_factor,
+                fullscreen,
+                "host window resized"
+            );
+            render_windows.resize_host_window(state, window_id, size, scale_factor, fullscreen);
+        }
+        HostEvent::FullscreenChanged {
+            window_id,
+            fullscreen,
+        } => {
+            debug!(?window_id, fullscreen, "host fullscreen changed");
+            render_windows.sync_host_fullscreen(state, window_id, fullscreen);
         }
         HostEvent::Input { window_id, event } => {
             if state.has_pending_control_actions() {
@@ -150,6 +166,7 @@ fn handle_window_created(
     window: Arc<WinitWindow>,
     size: Size<i32, Physical>,
     scale_factor: f64,
+    fullscreen: bool,
 ) {
     if let Err(err) = backend.add_window(window) {
         error!(?auto_window_id, ?host_window_id, error = %err, "failed to initialize host window renderer");
@@ -161,8 +178,16 @@ fn handle_window_created(
         ?host_window_id,
         ?size,
         scale_factor,
+        fullscreen,
         "host window created"
     );
-    render_windows.add_host_window(state, host_window_id, auto_window_id, size, scale_factor);
+    render_windows.add_host_window(
+        state,
+        host_window_id,
+        auto_window_id,
+        size,
+        scale_factor,
+        fullscreen,
+    );
     backend.window(host_window_id).request_redraw();
 }

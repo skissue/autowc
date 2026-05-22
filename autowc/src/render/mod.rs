@@ -28,16 +28,23 @@ struct RenderWindow {
     virtual_framebuffer: Option<VirtualFramebuffer>,
     host_size: Size<i32, Physical>,
     host_scale_factor: f64,
+    host_fullscreen: bool,
     damage_tracker: OutputDamageTracker,
 }
 
 impl RenderWindow {
-    fn new(output: Output, host_size: Size<i32, Physical>, host_scale_factor: f64) -> Self {
+    fn new(
+        output: Output,
+        host_size: Size<i32, Physical>,
+        host_scale_factor: f64,
+        host_fullscreen: bool,
+    ) -> Self {
         Self {
             output,
             virtual_framebuffer: None,
             host_size,
             host_scale_factor,
+            host_fullscreen,
             damage_tracker: OutputDamageTracker::new(host_size, 1.0, Transform::Flipped180),
         }
     }
@@ -48,17 +55,20 @@ impl RenderWindow {
         auto_window_id: AutoWindowId,
         size: Size<i32, Physical>,
         scale_factor: f64,
+        fullscreen: bool,
     ) {
         let host = HostGeometry::new(size, scale_factor);
         debug!(
             ?auto_window_id,
             ?size,
             scale_factor,
+            fullscreen,
             normalized_scale_factor = host.scale_factor,
             "resizing render host"
         );
         self.host_size = host.size;
         self.host_scale_factor = host.scale_factor;
+        self.host_fullscreen = fullscreen;
 
         let virtual_size = host.virtual_size_for(state);
         state.resize_window_host(
@@ -66,6 +76,7 @@ impl RenderWindow {
             host.size,
             virtual_size,
             host.output_scale(state),
+            fullscreen,
         );
         self.damage_tracker = OutputDamageTracker::new(host.size, 1.0, Transform::Flipped180);
     }
@@ -89,6 +100,7 @@ impl RenderWindows {
         auto_window_id: AutoWindowId,
         size: Size<i32, Physical>,
         scale_factor: f64,
+        fullscreen: bool,
     ) {
         let host = HostGeometry::new(size, scale_factor);
         let virtual_size = host.virtual_size_for(state);
@@ -97,6 +109,7 @@ impl RenderWindows {
             ?auto_window_id,
             ?size,
             scale_factor,
+            fullscreen,
             ?virtual_size,
             "adding render host window"
         );
@@ -106,6 +119,7 @@ impl RenderWindows {
             host.size,
             virtual_size,
             host.output_scale(state),
+            fullscreen,
         );
         let Some(output) = state.output_for_window(auto_window_id) else {
             warn!(?auto_window_id, "cannot add render window without output");
@@ -114,7 +128,7 @@ impl RenderWindows {
         self.insert(
             host_window_id,
             auto_window_id,
-            RenderWindow::new(output, host.size, host.scale_factor),
+            RenderWindow::new(output, host.size, host.scale_factor, fullscreen),
         );
     }
 
@@ -151,13 +165,32 @@ impl RenderWindows {
         host_window_id: HostWindowId,
         size: Size<i32, Physical>,
         scale_factor: f64,
+        fullscreen: bool,
     ) {
         let Some((auto_window_id, render_window)) = self.get_by_host_window_mut(host_window_id)
         else {
             warn!(?host_window_id, "cannot resize unknown render host window");
             return;
         };
-        render_window.resize_host(state, auto_window_id, size, scale_factor);
+        render_window.resize_host(state, auto_window_id, size, scale_factor, fullscreen);
+    }
+
+    pub(crate) fn sync_host_fullscreen(
+        &mut self,
+        state: &mut AutoWC,
+        host_window_id: HostWindowId,
+        fullscreen: bool,
+    ) {
+        let Some((auto_window_id, render_window)) = self.get_by_host_window_mut(host_window_id)
+        else {
+            warn!(
+                ?host_window_id,
+                "cannot sync fullscreen for unknown render host window"
+            );
+            return;
+        };
+        render_window.host_fullscreen = fullscreen;
+        state.set_window_host_fullscreen(auto_window_id, fullscreen);
     }
 
     pub(crate) fn redraw_host_window(
@@ -168,14 +201,18 @@ impl RenderWindows {
     ) {
         let size = backend.window_size(host_window_id);
         let scale_factor = backend.scale_factor(host_window_id);
+        let fullscreen = backend.fullscreen(host_window_id);
         let Some((auto_window_id, render_window)) = self.get_by_host_window_mut(host_window_id)
         else {
             warn!(?host_window_id, "cannot redraw unknown render host window");
             return;
         };
 
-        if size != render_window.host_size || scale_factor != render_window.host_scale_factor {
-            render_window.resize_host(state, auto_window_id, size, scale_factor);
+        if size != render_window.host_size
+            || scale_factor != render_window.host_scale_factor
+            || fullscreen != render_window.host_fullscreen
+        {
+            render_window.resize_host(state, auto_window_id, size, scale_factor, fullscreen);
         }
 
         render_host_window(
