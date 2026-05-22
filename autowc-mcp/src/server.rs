@@ -186,7 +186,7 @@ pub struct LaunchParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunParams {
     #[schemars(
-        description = "Ordered automation command batch. Command types are key, chord, text, mouse_move, mouse_button, click, scroll, and sleep."
+        description = "Ordered automation command batch. Command types are key, chord, text, keys, mouse_move, mouse_button, click, scroll, and sleep."
     )]
     pub commands: Vec<AutomationCommand>,
     #[schemars(
@@ -367,7 +367,7 @@ mod tests {
         let schema = serde_json::to_string(&schema).unwrap();
 
         assert!(schema.contains("Ordered automation command batch"));
-        assert!(schema.contains("key, chord, text"));
+        assert!(schema.contains("key, chord, text, keys"));
         assert!(schema.contains("Optional AutoWC window id"));
         assert!(schema.contains("Defaults to true"));
         assert!(schema.contains("without immediate visual feedback"));

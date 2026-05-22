@@ -27,6 +27,15 @@ pub enum AutomationCommand {
         #[schemars(description = "Text to type.")]
         text: String,
     },
+    #[schemars(
+        description = "Send an Emacs-style key sequence. Literal text is typed as-is outside angle tokens. Angle tokens send chords or directives, for example <C-l>example.org<RET><w:500>."
+    )]
+    Keys {
+        #[schemars(
+            description = "Key sequence to send. Examples: '<C-l>example.org<RET>', '<C-f>hello', '<C-->', '<C-M-->', '<w:500>'. Use \\< to type a literal '<' and \\\\ before a token to type a literal backslash."
+        )]
+        keys: String,
+    },
     #[schemars(description = "Move the mouse pointer.")]
     MouseMove {
         #[schemars(description = "Virtual-display x coordinate in pixels.")]
@@ -97,6 +106,10 @@ impl AutomationCommand {
             Self::Text { text } => serde_json::json!({
                 "type": "text",
                 "text": text,
+            }),
+            Self::Keys { keys } => serde_json::json!({
+                "type": "keys",
+                "keys": keys,
             }),
             Self::MouseMove { x, y } => serde_json::json!({
                 "type": "mouse_move",
@@ -322,6 +335,22 @@ mod tests {
     }
 
     #[test]
+    fn serializes_keys_sequence() {
+        let command = AutomationCommand::Keys {
+            keys: "<C-l>example.org<RET><w:500>".into(),
+        };
+
+        assert_eq!(
+            command.to_autowc_line(None).unwrap(),
+            r#"{"keys":"<C-l>example.org<RET><w:500>","type":"keys"}"#
+        );
+        assert_eq!(
+            command.to_autowc_line(Some(2)).unwrap(),
+            r#"{"keys":"<C-l>example.org<RET><w:500>","type":"keys","window":2}"#
+        );
+    }
+
+    #[test]
     fn rejects_bad_tokens() {
         assert!(AutomationCommand::Key {
             key: "KeyA KeyB".into(),
@@ -380,6 +409,7 @@ mod tests {
 
         assert!(schema.contains("W3C KeyboardEvent.code"));
         assert!(schema.contains("Text to type"));
+        assert!(schema.contains("Emacs-style key sequence"));
         assert!(schema.contains("Virtual-display x coordinate"));
         assert!(schema.contains("Sleep duration in whole milliseconds"));
     }
