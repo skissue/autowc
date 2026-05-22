@@ -380,6 +380,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_keys_sequence_with_spaces() {
+        assert_eq!(
+            parse_control_command("keys <C-l>example.org<RET><w:500>").unwrap(),
+            command(ControlCommandVariant::KeysSequence {
+                actions: vec![
+                    KeysSequenceAction::Chord(vec![
+                        key_to_code("ControlLeft").unwrap(),
+                        key_to_code("KeyL").unwrap(),
+                    ]),
+                    KeysSequenceAction::Text("example.org".to_string()),
+                    KeysSequenceAction::Chord(vec![key_to_code("Enter").unwrap()]),
+                    KeysSequenceAction::Wait { duration_ms: 500 },
+                ],
+            })
+        );
+        assert_eq!(
+            parse_control_command("keys hello world").unwrap(),
+            command(ControlCommandVariant::KeysSequence {
+                actions: vec![KeysSequenceAction::Text("hello world".to_string())],
+            })
+        );
+        assert!(parse_control_command("keys").is_err());
+        assert!(parse_control_command("keys <C-").is_err());
+    }
+
+    #[test]
     fn parses_plain_window_prefix() {
         assert_eq!(
             parse_control_command("2 text second window").unwrap(),
@@ -398,6 +424,17 @@ mod tests {
         assert_eq!(
             parse_control_command("4 close").unwrap(),
             targeted_command(4, ControlCommandVariant::Close)
+        );
+        assert_eq!(
+            parse_control_command("5 keys <RET>").unwrap(),
+            targeted_command(
+                5,
+                ControlCommandVariant::KeysSequence {
+                    actions: vec![KeysSequenceAction::Chord(vec![
+                        key_to_code("Enter").unwrap()
+                    ])],
+                }
+            )
         );
         assert!(parse_control_command("0 text bad").is_err());
         assert!(parse_control_command("2").is_err());

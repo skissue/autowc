@@ -1,6 +1,6 @@
 use std::{ffi::OsString, path::PathBuf};
 
-use crate::input::keyboard::key_to_code;
+use crate::input::keyboard::{key_to_code, keys_sequence::parse_keys_sequence};
 
 use super::{
     ensure_no_extra, parse_button, parse_f64, parse_press_action, ControlCommand,
@@ -29,6 +29,18 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
         return Ok(Some(ControlCommand::targeted(
             window,
             ControlCommandVariant::Text(text.to_string()),
+        )?));
+    }
+
+    if let Some(keys) = line.strip_prefix("keys") {
+        let keys = keys
+            .strip_prefix(char::is_whitespace)
+            .ok_or_else(|| "usage: keys <sequence>".to_string())?;
+        return Ok(Some(ControlCommand::targeted(
+            window,
+            ControlCommandVariant::KeysSequence {
+                actions: parse_keys_sequence(keys)?,
+            },
         )?));
     }
 
