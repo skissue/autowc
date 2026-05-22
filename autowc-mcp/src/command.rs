@@ -21,13 +21,6 @@ pub enum AutomationCommand {
         keys: Vec<String>,
     },
     #[schemars(
-        description = "Type literal text. Control characters are translated to keys when possible. For example, newline (\\n) will be translated to Enter, and tab (\\t) will translate to Tab."
-    )]
-    Text {
-        #[schemars(description = "Text to type.")]
-        text: String,
-    },
-    #[schemars(
         description = "Send a compact keyboard sequence. Prefer this for keyboard automation because it can mix literal text, Emacs-style chords, special keys, and waits in one ordered command. Text outside angle tokens is typed literally. Angle tokens send keys, chords, or directives such as <C-l>, <RET>, <C-->, <C-M-->, and <w:500>."
     )]
     Keys {
@@ -103,10 +96,6 @@ impl AutomationCommand {
                     "keys": keys,
                 })
             }
-            Self::Text { text } => serde_json::json!({
-                "type": "text",
-                "text": text,
-            }),
             Self::Keys { keys } => serde_json::json!({
                 "type": "keys",
                 "keys": keys,
@@ -323,18 +312,6 @@ mod tests {
     }
 
     #[test]
-    fn serializes_text_with_newlines() {
-        let command = AutomationCommand::Text {
-            text: "hello\nworld".into(),
-        };
-
-        assert_eq!(
-            command.to_autowc_line(None).unwrap(),
-            r#"{"text":"hello\nworld","type":"text"}"#
-        );
-    }
-
-    #[test]
     fn serializes_keys_sequence() {
         let command = AutomationCommand::Keys {
             keys: "<C-l>example.org<RET><w:500>".into(),
@@ -408,7 +385,6 @@ mod tests {
         let schema = serde_json::to_string(&schema).unwrap();
 
         assert!(schema.contains("W3C KeyboardEvent.code"));
-        assert!(schema.contains("Text to type"));
         assert!(schema.contains("Prefer this for keyboard automation"));
         assert!(schema.contains("w:500"));
         assert!(schema.contains("waits 500 ms"));
