@@ -28,11 +28,11 @@ pub enum AutomationCommand {
         text: String,
     },
     #[schemars(
-        description = "Send an Emacs-style key sequence. Literal text is typed as-is outside angle tokens. Angle tokens send chords or directives, for example <C-l>example.org<RET><w:500>."
+        description = "Send a compact keyboard sequence. Prefer this for keyboard automation because it can mix literal text, Emacs-style chords, special keys, and waits in one ordered command. Text outside angle tokens is typed literally. Angle tokens send keys, chords, or directives such as <C-l>, <RET>, <C-->, <C-M-->, and <w:500>."
     )]
     Keys {
         #[schemars(
-            description = "Key sequence to send. Examples: '<C-l>example.org<RET>', '<C-f>hello', '<C-->', '<C-M-->', '<w:500>'. Use \\< to type a literal '<' and \\\\ before a token to type a literal backslash."
+            description = "Key sequence to send. Examples: '<C-l>example.org<RET>' focuses the address bar and visits a URL in a web browser; '<C-f>hello' opens find and types text; '<w:500>' waits 500 ms before continuing. Angle tokens use Emacs-style modifiers: C for Control, M for Alt/Meta, S for Shift, and lowercase s for Super. Common aliases include RET, ESC, TAB, SPC, BS, DEL, UP, DOWN, LEFT, and RIGHT. Use \\< to type a literal '<' and \\\\ before a token to type a literal backslash."
         )]
         keys: String,
     },
@@ -409,7 +409,10 @@ mod tests {
 
         assert!(schema.contains("W3C KeyboardEvent.code"));
         assert!(schema.contains("Text to type"));
-        assert!(schema.contains("Emacs-style key sequence"));
+        assert!(schema.contains("Prefer this for keyboard automation"));
+        assert!(schema.contains("w:500"));
+        assert!(schema.contains("waits 500 ms"));
+        assert!(schema.contains("lowercase s for Super"));
         assert!(schema.contains("Virtual-display x coordinate"));
         assert!(schema.contains("Sleep duration in whole milliseconds"));
     }

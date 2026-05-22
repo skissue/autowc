@@ -33,7 +33,7 @@ The MCP server owns one AutoWC compositor session. It starts AutoWC automaticall
 
 When more than one window is open, call `list` and then pass the desired window ID to `run`, `screenshot`, or `close`. If `window` is omitted, AutoWC uses the first existing window (lowest ID).
 
-Mouse coordinates are virtual-display pixels with the origin at the top-left of the target AutoWC window. Keyboard commands use W3C KeyboardEvent.code physical key names, such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5.
+Mouse coordinates are virtual-display pixels with the origin at the top-left of the target AutoWC window. Keyboard commands use W3C KeyboardEvent.code physical key names, such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5. Prefer the `keys` command for keyboard input when possible as it has the most flexibility. Use `key`, `chord`, or `text` only when you need lower-level primitives.
 
 If AutoWC exits, later tool calls return ok=false with the captured stderr log.";
 
@@ -343,6 +343,7 @@ mod tests {
         assert!(SERVER_INSTRUCTIONS.contains("starts AutoWC automatically"));
         assert!(SERVER_INSTRUCTIONS.contains("call `list`"));
         assert!(SERVER_INSTRUCTIONS.contains("W3C KeyboardEvent.code"));
+        assert!(SERVER_INSTRUCTIONS.contains("Prefer the `keys` command"));
         assert!(!SERVER_INSTRUCTIONS.contains("return_screenshot"));
         assert!(!SERVER_INSTRUCTIONS.contains("The close tool only sends a close request"));
         assert!(!SERVER_INSTRUCTIONS.contains("close stops"));
