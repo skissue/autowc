@@ -1,7 +1,7 @@
 use smithay::{
     delegate_xdg_shell,
     desktop::{find_popup_root_surface, get_popup_toplevel_coords, PopupKind, Window},
-    reexports::wayland_server::protocol::{wl_seat, wl_surface::WlSurface},
+    reexports::wayland_server::protocol::{wl_output, wl_seat, wl_surface::WlSurface},
     utils::Serial,
     wayland::{
         compositor::with_states,
@@ -51,6 +51,20 @@ impl XdgShellHandler for AutoWC {
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
         trace!("xdg popup grab requested");
         // TODO popup grabs
+    }
+
+    fn fullscreen_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _output: Option<wl_output::WlOutput>,
+    ) {
+        debug!("xdg toplevel fullscreen requested");
+        self.request_host_fullscreen(surface.wl_surface(), true);
+    }
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        debug!("xdg toplevel unfullscreen requested");
+        self.request_host_fullscreen(surface.wl_surface(), false);
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {

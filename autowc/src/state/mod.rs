@@ -998,6 +998,39 @@ impl AutoWC {
         Ok(())
     }
 
+    pub fn request_host_fullscreen(&self, surface: &WlSurface, fullscreen: bool) {
+        let Some(window_id) = self.windows.find_id_by_surface(surface) else {
+            warn!(fullscreen, "fullscreen request for unknown client toplevel");
+            return;
+        };
+        let Some(host_window_id) = self
+            .windows
+            .get(window_id)
+            .and_then(|window| window.host_window_id())
+        else {
+            warn!(
+                ?window_id,
+                fullscreen, "fullscreen request before host window exists"
+            );
+            return;
+        };
+        let Some(requester) = &self.host_window_requester else {
+            warn!(
+                ?window_id,
+                fullscreen, "cannot request host fullscreen without host backend"
+            );
+            return;
+        };
+
+        info!(
+            ?window_id,
+            ?host_window_id,
+            fullscreen,
+            "requesting host fullscreen"
+        );
+        requester.set_fullscreen(host_window_id, fullscreen);
+    }
+
     fn map_configured_window(&mut self, window_id: AutoWindowId) {
         let Some(window) = self
             .windows

@@ -31,7 +31,7 @@ use smithay::{
             },
             platform::{pump_events::EventLoopExtPumpEvents, scancode::PhysicalKeyExtScancode},
             raw_window_handle::{HasWindowHandle, RawWindowHandle},
-            window::{Window as WinitWindow, WindowAttributes, WindowId},
+            window::{Fullscreen, Window as WinitWindow, WindowAttributes, WindowId},
         },
     },
     utils::{Clock, Monotonic, Physical, Rectangle, Size},
@@ -212,6 +212,19 @@ impl HostWindowRequester {
             .event_loop_proxy
             .send_event(HostWindowRequest::Close { window_id });
     }
+
+    pub fn set_fullscreen(&self, window_id: WindowId, fullscreen: bool) {
+        debug!(
+            ?window_id,
+            fullscreen, "requesting host window fullscreen change"
+        );
+        let _ = self
+            .event_loop_proxy
+            .send_event(HostWindowRequest::SetFullscreen {
+                window_id,
+                fullscreen,
+            });
+    }
 }
 
 #[derive(Debug)]
@@ -222,6 +235,10 @@ enum HostWindowRequest {
     },
     Close {
         window_id: WindowId,
+    },
+    SetFullscreen {
+        window_id: WindowId,
+        fullscreen: bool,
     },
 }
 
@@ -493,6 +510,21 @@ impl<F: FnMut(HostEvent)> HostEventLoopApp<'_, F> {
                 debug!(?window_id, "closing requested host window");
                 self.inner.windows.remove(&window_id);
                 (self.callback)(HostEvent::WindowClosed { window_id });
+            }
+            HostWindowRequest::SetFullscreen {
+                window_id,
+                fullscreen,
+            } => {
+                let Some(window) = self.window(window_id) else {
+                    warn!(
+                        ?window_id,
+                        fullscreen, "cannot fullscreen unknown host window"
+                    );
+                    return;
+                };
+                debug!(?window_id, fullscreen, "setting host window fullscreen");
+                let fullscreen = fullscreen.then_some(Fullscreen::Borderless(None));
+                window.window.set_fullscreen(fullscreen);
             }
         }
     }

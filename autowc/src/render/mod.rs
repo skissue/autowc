@@ -201,17 +201,14 @@ impl RenderWindows {
     ) {
         let size = backend.window_size(host_window_id);
         let scale_factor = backend.scale_factor(host_window_id);
-        let fullscreen = backend.fullscreen(host_window_id);
         let Some((auto_window_id, render_window)) = self.get_by_host_window_mut(host_window_id)
         else {
             warn!(?host_window_id, "cannot redraw unknown render host window");
             return;
         };
 
-        if size != render_window.host_size
-            || scale_factor != render_window.host_scale_factor
-            || fullscreen != render_window.host_fullscreen
-        {
+        if size != render_window.host_size || scale_factor != render_window.host_scale_factor {
+            let fullscreen = backend.fullscreen(host_window_id);
             render_window.resize_host(state, auto_window_id, size, scale_factor, fullscreen);
         }
 
