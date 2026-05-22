@@ -679,9 +679,9 @@ impl AutoWC {
         let program_name = program.to_string_lossy();
         info!(program = %program_name, arg_count = args.len(), "launching child process");
         let mut command = Command::new(program);
+        configure_child_environment(&mut command, &self.socket_name);
         let child = command
             .args(args)
-            .env("WAYLAND_DISPLAY", &self.socket_name)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1083,6 +1083,12 @@ impl AutoWC {
     }
 }
 
+fn configure_child_environment(command: &mut Command, socket_name: &OsString) {
+    command
+        .env("WAYLAND_DISPLAY", socket_name)
+        .env_remove("DISPLAY");
+}
+
 fn reap_launched_children(children: &mut Vec<Child>) -> bool {
     let mut reaped = false;
     children.retain_mut(|child| match child.try_wait() {
@@ -1372,6 +1378,21 @@ mod tests {
         cleanup_screenshot_paths([path.clone(), missing_path]);
 
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn configure_child_environment_sets_wayland_display_and_unsets_display() {
+        let socket_name = OsString::from("wayland-autowc-test");
+        let mut command = Command::new("true");
+
+        configure_child_environment(&mut command, &socket_name);
+
+        let envs: HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(
+            envs.get(std::ffi::OsStr::new("WAYLAND_DISPLAY")),
+            Some(&Some(std::ffi::OsStr::new("wayland-autowc-test")))
+        );
+        assert_eq!(envs.get(std::ffi::OsStr::new("DISPLAY")), Some(&None));
     }
 
     #[test]
