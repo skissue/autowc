@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -9,7 +9,7 @@ use std::{
 };
 
 use smithay::{
-    backend::input::{ButtonState, KeyState},
+    backend::input::{ButtonState, KeyState, Keycode},
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
     input::{Seat, SeatState},
     output::Output,
@@ -65,6 +65,7 @@ pub struct AutoWC {
     pub(crate) pending_clipboard_sync: Option<clipboard::PendingClipboardSync>,
     pub stay_alive: bool,
     pub pending_screenshots: VecDeque<ScreenshotRequest>,
+    pub(crate) host_pressed_keys: HashMap<AutoWindowId, HashSet<Keycode>>,
     pub control_queue: VecDeque<QueuedControlAction>,
     pub next_control_action_at: Option<Instant>,
     pub key_event_interval: Duration,
@@ -167,6 +168,7 @@ impl AutoWC {
             pending_clipboard_sync: None,
             stay_alive,
             pending_screenshots: VecDeque::new(),
+            host_pressed_keys: HashMap::new(),
             control_queue: VecDeque::new(),
             next_control_action_at: None,
             key_event_interval: timing.key_event_interval,

@@ -1,7 +1,7 @@
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, ButtonState, InputBackend, InputEvent,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, InputBackend, InputEvent, KeyState,
+        KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
     },
     input::{
         keyboard::FilterResult,
@@ -14,6 +14,38 @@ use crate::{state::AutoWC, window::AutoWindowId};
 use tracing::trace;
 
 impl AutoWC {
+    pub fn should_process_blocked_host_input<I: InputBackend>(
+        &self,
+        window_id: AutoWindowId,
+        event: &InputEvent<I>,
+    ) -> bool {
+        matches!(
+            event,
+            InputEvent::Keyboard { event, .. }
+                if event.state() == KeyState::Released
+                    && self.is_host_key_pressed(window_id, event.key_code())
+        )
+    }
+
+    pub fn release_pressed_host_keys(&mut self, window_id: AutoWindowId) {
+        let Some(keys) = self.host_pressed_keys.remove(&window_id) else {
+            return;
+        };
+
+        let mut keys = keys.into_iter().collect::<Vec<_>>();
+        keys.sort_by_key(|key| key.raw());
+        trace!(
+            ?window_id,
+            count = keys.len(),
+            "releasing pressed host keys after host focus loss"
+        );
+
+        self.focus_auto_window(window_id);
+        for key_code in keys {
+            self.forward_host_keyboard_input(window_id, key_code, KeyState::Released);
+        }
+    }
+
     pub fn process_input_event<I: InputBackend>(
         &mut self,
         window_id: AutoWindowId,
@@ -24,17 +56,10 @@ impl AutoWC {
                 trace!(?window_id, key_code = ?event.key_code(), state = ?event.state(), "forwarding host keyboard input");
                 self.focus_auto_window(window_id);
 
-                let serial = SERIAL_COUNTER.next_serial();
-                let time = self.now_msec();
-
-                self.seat.get_keyboard().unwrap().input::<(), _>(
-                    self,
-                    event.key_code(),
-                    event.state(),
-                    serial,
-                    time,
-                    |_, _, _| FilterResult::Forward,
-                );
+                let key_code = event.key_code();
+                let state = event.state();
+                self.record_host_key_state(window_id, key_code, state);
+                self.forward_host_keyboard_input(window_id, key_code, state);
             }
             InputEvent::PointerMotion { .. } => {}
             InputEvent::PointerMotionAbsolute { event, .. } => {
@@ -132,5 +157,63 @@ impl AutoWC {
             }
             _ => {}
         }
+    }
+
+    fn is_host_key_pressed(&self, window_id: AutoWindowId, key_code: Keycode) -> bool {
+        self.host_pressed_keys
+            .get(&window_id)
+            .is_some_and(|keys| keys.contains(&key_code))
+    }
+
+    fn record_host_key_state(
+        &mut self,
+        window_id: AutoWindowId,
+        key_code: Keycode,
+        state: KeyState,
+    ) {
+        match state {
+            KeyState::Pressed => {
+                self.host_pressed_keys
+                    .entry(window_id)
+                    .or_default()
+                    .insert(key_code);
+            }
+            KeyState::Released => {
+                let Some(keys) = self.host_pressed_keys.get_mut(&window_id) else {
+                    return;
+                };
+                keys.remove(&key_code);
+                if keys.is_empty() {
+                    self.host_pressed_keys.remove(&window_id);
+                }
+            }
+        }
+    }
+
+    fn forward_host_keyboard_input(
+        &mut self,
+        window_id: AutoWindowId,
+        key_code: Keycode,
+        state: KeyState,
+    ) {
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.now_msec();
+
+        trace!(
+            ?window_id,
+            ?key_code,
+            ?state,
+            ?serial,
+            time,
+            "sending host key event"
+        );
+        self.seat.get_keyboard().unwrap().input::<(), _>(
+            self,
+            key_code,
+            state,
+            serial,
+            time,
+            |_, _, _| FilterResult::Forward,
+        );
     }
 }

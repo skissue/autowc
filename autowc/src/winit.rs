@@ -109,19 +109,28 @@ fn handle_host_event(
             render_windows.sync_host_fullscreen(state, window_id, fullscreen);
         }
         HostEvent::Input { window_id, event } => {
-            if state.has_pending_control_actions() {
-                trace!(
-                    ?window_id,
-                    "ignoring host input while synthetic control actions are pending"
-                );
-                return;
-            }
-            if let Some(auto_window_id) = render_windows.auto_window_id(window_id) {
-                trace!(?window_id, ?auto_window_id, ?event, "processing host input");
-                state.process_input_event(auto_window_id, event);
-            } else {
+            let Some(auto_window_id) = render_windows.auto_window_id(window_id) else {
                 warn!(?window_id, "received input for unknown host window");
+                return;
+            };
+            if state.has_pending_control_actions() {
+                if state.should_process_blocked_host_input(auto_window_id, &event) {
+                    trace!(
+                        ?window_id,
+                        ?auto_window_id,
+                        ?event,
+                        "processing blocked host key release"
+                    );
+                } else {
+                    trace!(
+                        ?window_id,
+                        "ignoring host input while synthetic control actions are pending"
+                    );
+                    return;
+                }
             }
+            trace!(?window_id, ?auto_window_id, ?event, "processing host input");
+            state.process_input_event(auto_window_id, event);
         }
         HostEvent::Redraw { window_id } => {
             trace!(?window_id, "redrawing host window");
@@ -132,6 +141,16 @@ fn handle_host_event(
             state.close_host_window(window_id);
         }
         HostEvent::Focus { window_id, focused } => {
+            let Some(auto_window_id) = render_windows.auto_window_id(window_id) else {
+                warn!(
+                    ?window_id,
+                    focused, "received focus event for unknown host window"
+                );
+                return;
+            };
+            if !focused {
+                state.release_pressed_host_keys(auto_window_id);
+            }
             if state.has_pending_control_actions() {
                 trace!(
                     ?window_id,
@@ -140,13 +159,6 @@ fn handle_host_event(
                 );
                 return;
             }
-            let Some(auto_window_id) = render_windows.auto_window_id(window_id) else {
-                warn!(
-                    ?window_id,
-                    focused, "received focus event for unknown host window"
-                );
-                return;
-            };
             if focused {
                 debug!(?window_id, ?auto_window_id, "host window focused");
                 state.focus_auto_window(auto_window_id);
