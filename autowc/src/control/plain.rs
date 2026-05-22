@@ -149,7 +149,30 @@ fn parse_mouse<'a>(
                 ControlCommandVariant::PointerButton { button, action },
             )))
         }
-        _ => Err("usage: mouse move <x> <y> | mouse button [down|up|press] [button]".into()),
+        Some("drag") => {
+            let start_x = parse_f64(parts.next(), "start_x")?;
+            let start_y = parse_f64(parts.next(), "start_y")?;
+            let end_x = parse_f64(parts.next(), "end_x")?;
+            let end_y = parse_f64(parts.next(), "end_y")?;
+            let button = match parts.next() {
+                Some(button) => parse_button(Some(button))?,
+                None => BTN_LEFT,
+            };
+            ensure_no_extra(parts)?;
+            Ok(Some(ControlCommand::new(
+                ControlCommandVariant::PointerDrag {
+                    start_x,
+                    start_y,
+                    end_x,
+                    end_y,
+                    button,
+                },
+            )))
+        }
+        _ => Err(
+            "usage: mouse move <x> <y> | mouse button [down|up|press] [button] | mouse drag <start_x> <start_y> <end_x> <end_y> [button]"
+                .into(),
+        ),
     }
 }
 

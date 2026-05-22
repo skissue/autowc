@@ -326,6 +326,26 @@ mod tests {
                 action: PressAction::Press,
             })
         );
+        assert_eq!(
+            parse_control_command("mouse drag 10 20 30 40").unwrap(),
+            command(ControlCommandVariant::PointerDrag {
+                start_x: 10.0,
+                start_y: 20.0,
+                end_x: 30.0,
+                end_y: 40.0,
+                button: BTN_LEFT,
+            })
+        );
+        assert_eq!(
+            parse_control_command("mouse drag 10 20 30 40 right").unwrap(),
+            command(ControlCommandVariant::PointerDrag {
+                start_x: 10.0,
+                start_y: 20.0,
+                end_x: 30.0,
+                end_y: 40.0,
+                button: BTN_RIGHT,
+            })
+        );
     }
 
     #[test]
@@ -513,6 +533,8 @@ mod tests {
         assert!(parse_control_command("pointer move 10 20").is_err());
         assert!(parse_control_command("mouse move 10").is_err());
         assert!(parse_control_command("mouse button tap").is_err());
+        assert!(parse_control_command("mouse drag 10 20 30").is_err());
+        assert!(parse_control_command("mouse drag 10 20 30 40 nope").is_err());
     }
 
     #[test]
