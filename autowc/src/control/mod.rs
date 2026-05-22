@@ -306,11 +306,8 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_control_command("scroll 0 -120").unwrap(),
-            command(ControlCommandVariant::Scroll {
-                dx: 0.0,
-                dy: -120.0,
-            })
+            parse_control_command("scroll 0 -3").unwrap(),
+            command(ControlCommandVariant::Scroll { dx: 0.0, dy: -3.0 })
         );
         assert_eq!(
             parse_control_command("quit").unwrap(),
@@ -577,11 +574,8 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_json_control_command(r#"{"type":"scroll","dx":0,"dy":-120}"#).unwrap(),
-            ControlCommandVariant::Scroll {
-                dx: 0.0,
-                dy: -120.0,
-            }
+            parse_json_control_command(r#"{"type":"scroll","dx":0,"dy":-3}"#).unwrap(),
+            ControlCommandVariant::Scroll { dx: 0.0, dy: -3.0 }
         );
         assert_eq!(
             parse_json_control_command(r#"{"type":"sleep","ms":250}"#).unwrap(),

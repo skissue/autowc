@@ -10,7 +10,11 @@ use smithay::{
     utils::{Physical, Point, SERIAL_COUNTER},
 };
 
-use crate::{state::AutoWC, window::AutoWindowId};
+use crate::{
+    input::{SCROLL_AXIS_VALUE_PER_WHEEL_DETENT, SCROLL_V120_PER_WHEEL_DETENT},
+    state::AutoWC,
+    window::AutoWindowId,
+};
 use tracing::trace;
 
 impl AutoWC {
@@ -120,10 +124,14 @@ impl AutoWC {
                 trace!(?window_id, ?source, "forwarding host pointer axis");
 
                 let horizontal_amount = event.amount(Axis::Horizontal).unwrap_or_else(|| {
-                    event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * 15.0 / 120.
+                    event.amount_v120(Axis::Horizontal).unwrap_or(0.0)
+                        * SCROLL_AXIS_VALUE_PER_WHEEL_DETENT
+                        / SCROLL_V120_PER_WHEEL_DETENT
                 });
                 let vertical_amount = event.amount(Axis::Vertical).unwrap_or_else(|| {
-                    event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.
+                    event.amount_v120(Axis::Vertical).unwrap_or(0.0)
+                        * SCROLL_AXIS_VALUE_PER_WHEEL_DETENT
+                        / SCROLL_V120_PER_WHEEL_DETENT
                 });
                 let horizontal_amount_discrete = event.amount_v120(Axis::Horizontal);
                 let vertical_amount_discrete = event.amount_v120(Axis::Vertical);

@@ -1295,8 +1295,10 @@ pub enum QueuedControlActionKind {
         state: ButtonState,
     },
     Scroll {
-        dx: f64,
-        dy: f64,
+        dx_axis: f64,
+        dy_axis: f64,
+        dx_v120: i32,
+        dy_v120: i32,
     },
     Screenshot {
         path: Option<PathBuf>,

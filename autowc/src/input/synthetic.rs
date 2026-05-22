@@ -11,7 +11,10 @@ use smithay::{
 
 use crate::{
     control::{text_to_key_events, ControlCommand, ControlCommandVariant, PressAction},
-    input::keyboard::keys_sequence::KeysSequenceAction,
+    input::{
+        keyboard::keys_sequence::KeysSequenceAction, SCROLL_AXIS_VALUE_PER_WHEEL_DETENT,
+        SCROLL_V120_PER_WHEEL_DETENT,
+    },
     protocol::ControlResponse,
     state::{AutoWC, ControlResponseHandle, QueuedControlAction, QueuedControlActionKind},
     window::AutoWindowId,
@@ -22,6 +25,12 @@ enum PreparedKeysSequenceAction {
     TextEvents(Vec<(u32, PressAction)>),
     Chord(Vec<u32>),
     Wait(Duration),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PreparedScrollAxis {
+    axis: f64,
+    v120: i32,
 }
 
 impl AutoWC {
@@ -176,11 +185,32 @@ impl AutoWC {
                 );
             }
             ControlCommandVariant::Scroll { dx, dy } => {
-                self.queue_control_action(
-                    window_id,
-                    response,
-                    QueuedControlActionKind::Scroll { dx, dy },
-                );
+                let dx = match prepare_scroll_axis(dx, "dx") {
+                    Ok(axis) => axis,
+                    Err(err) => {
+                        self.complete_control_response(response, ControlResponse::Error(err));
+                        return;
+                    }
+                };
+                let dy = match prepare_scroll_axis(dy, "dy") {
+                    Ok(axis) => axis,
+                    Err(err) => {
+                        self.complete_control_response(response, ControlResponse::Error(err));
+                        return;
+                    }
+                };
+                if dx.v120 != 0 || dy.v120 != 0 {
+                    self.queue_control_action(
+                        window_id,
+                        response,
+                        QueuedControlActionKind::Scroll {
+                            dx_axis: dx.axis,
+                            dy_axis: dy.axis,
+                            dx_v120: dx.v120,
+                            dy_v120: dy.v120,
+                        },
+                    );
+                }
             }
             ControlCommandVariant::Screenshot { path } => {
                 self.queue_control_action(
@@ -260,8 +290,13 @@ impl AutoWC {
                 QueuedControlActionKind::PointerButton { button, state } => {
                     self.process_virtual_pointer_button(button, state);
                 }
-                QueuedControlActionKind::Scroll { dx, dy } => {
-                    self.process_virtual_scroll(dx, dy);
+                QueuedControlActionKind::Scroll {
+                    dx_axis,
+                    dy_axis,
+                    dx_v120,
+                    dy_v120,
+                } => {
+                    self.process_virtual_scroll(dx_axis, dy_axis, dx_v120, dy_v120);
                 }
                 QueuedControlActionKind::Screenshot { path, delay_after } => {
                     self.queue_screenshot(action.window_id, path, action.response);
@@ -466,20 +501,52 @@ impl AutoWC {
         pointer.frame(self);
     }
 
-    pub fn process_virtual_scroll(&mut self, dx: f64, dy: f64) {
-        trace!(dx, dy, "sending virtual scroll");
-        let mut frame = AxisFrame::new(self.now_msec()).source(AxisSource::Wheel);
-        if dx != 0.0 {
-            frame = frame.value(Axis::Horizontal, dx);
+    pub fn process_virtual_scroll(
+        &mut self,
+        dx_axis: f64,
+        dy_axis: f64,
+        dx_v120: i32,
+        dy_v120: i32,
+    ) {
+        if dx_v120 == 0 && dy_v120 == 0 {
+            trace!("ignoring zero virtual scroll");
+            return;
         }
-        if dy != 0.0 {
-            frame = frame.value(Axis::Vertical, dy);
+
+        trace!(dx_axis, dy_axis, dx_v120, dy_v120, "sending virtual scroll");
+        let mut frame = AxisFrame::new(self.now_msec()).source(AxisSource::Wheel);
+        if dx_v120 != 0 {
+            frame = frame
+                .value(Axis::Horizontal, dx_axis)
+                .v120(Axis::Horizontal, dx_v120);
+        }
+        if dy_v120 != 0 {
+            frame = frame
+                .value(Axis::Vertical, dy_axis)
+                .v120(Axis::Vertical, dy_v120);
         }
 
         let pointer = self.seat.get_pointer().unwrap();
         pointer.axis(self, frame);
         pointer.frame(self);
     }
+}
+
+fn prepare_scroll_axis(detents: f64, name: &str) -> Result<PreparedScrollAxis, String> {
+    if !detents.is_finite() {
+        return Err(format!("scroll {name} must be finite"));
+    }
+
+    let v120 = (detents * SCROLL_V120_PER_WHEEL_DETENT).round();
+    if !v120.is_finite() || v120 < i32::MIN as f64 || v120 > i32::MAX as f64 {
+        return Err(format!("scroll {name} is too large"));
+    }
+
+    let v120 = v120 as i32;
+    Ok(PreparedScrollAxis {
+        axis: v120 as f64 * SCROLL_AXIS_VALUE_PER_WHEEL_DETENT / SCROLL_V120_PER_WHEEL_DETENT,
+        v120,
+    })
 }
 
 fn prepare_keys_sequence_actions(
@@ -498,4 +565,65 @@ fn prepare_keys_sequence_actions(
         });
     }
     Ok(prepared)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepares_scroll_detents() {
+        assert_eq!(
+            prepare_scroll_axis(1.0, "dy").unwrap(),
+            PreparedScrollAxis {
+                axis: 15.0,
+                v120: 120,
+            }
+        );
+        assert_eq!(
+            prepare_scroll_axis(0.25, "dy").unwrap(),
+            PreparedScrollAxis {
+                axis: 3.75,
+                v120: 30,
+            }
+        );
+        assert_eq!(
+            prepare_scroll_axis(-2.0, "dy").unwrap(),
+            PreparedScrollAxis {
+                axis: -30.0,
+                v120: -240,
+            }
+        );
+    }
+
+    #[test]
+    fn rounds_scroll_detents_to_nearest_v120_unit() {
+        assert_eq!(
+            prepare_scroll_axis(1.0 / 120.0, "dy").unwrap(),
+            PreparedScrollAxis {
+                axis: 0.125,
+                v120: 1,
+            }
+        );
+        assert_eq!(
+            prepare_scroll_axis(0.001, "dy").unwrap(),
+            PreparedScrollAxis { axis: 0.0, v120: 0 }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_scroll_detents() {
+        assert_eq!(
+            prepare_scroll_axis(f64::NAN, "dy").unwrap_err(),
+            "scroll dy must be finite"
+        );
+        assert_eq!(
+            prepare_scroll_axis(f64::INFINITY, "dy").unwrap_err(),
+            "scroll dy must be finite"
+        );
+        assert_eq!(
+            prepare_scroll_axis(i32::MAX as f64, "dy").unwrap_err(),
+            "scroll dy is too large"
+        );
+    }
 }
