@@ -632,6 +632,55 @@ impl AutoWC {
         }
     }
 
+    pub fn resize_auto_window(
+        &mut self,
+        window_id: AutoWindowId,
+        width: i32,
+        height: i32,
+    ) -> Result<(), String> {
+        if width <= 0 || height <= 0 {
+            return Err("width and height must be positive".to_string());
+        }
+
+        let virtual_size = Size::from((width, height));
+        let Some(window) = self
+            .windows
+            .get(window_id)
+            .and_then(|auto_window| auto_window.primary_window())
+            .cloned()
+        else {
+            return Err(format!("unknown window: {}", window_id.raw()));
+        };
+
+        info!(?window_id, ?virtual_size, "resizing auto window");
+        let host_size = self.window_host_size(window_id);
+        let host_scale_factor = self.window_geometry(window_id).host_scale_factor();
+        self.windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .set_sizing(WindowSizing::Fixed { size: virtual_size });
+        let (_, output_scale) =
+            self.output_mode_for_window(window_id, host_size, virtual_size, host_scale_factor);
+        self.update_window_output(window_id, host_size, virtual_size, output_scale);
+
+        let fullscreen = self
+            .windows
+            .get(window_id)
+            .expect("AutoWC window is missing")
+            .host_fullscreen();
+        self.configure_toplevel(&window, virtual_size, fullscreen);
+        let toplevel = window.toplevel().unwrap();
+        if toplevel.is_initial_configure_sent() {
+            toplevel.send_pending_configure();
+        }
+
+        for overlay in self.overlay_windows(window_id) {
+            self.center_overlay(window_id, &overlay);
+        }
+
+        Ok(())
+    }
+
     pub fn set_window_host_fullscreen(&mut self, window_id: AutoWindowId, fullscreen: bool) {
         let changed = self
             .windows
@@ -1394,6 +1443,10 @@ pub enum QueuedControlActionKind {
     Screenshot {
         path: Option<PathBuf>,
         delay_after: Duration,
+    },
+    Resize {
+        width: i32,
+        height: i32,
     },
     Close,
     Delay(Duration),

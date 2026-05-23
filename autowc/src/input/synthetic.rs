@@ -96,7 +96,9 @@ impl AutoWC {
 
         let queued_action_handles_response = matches!(
             &command.variant,
-            ControlCommandVariant::Screenshot { .. } | ControlCommandVariant::Close
+            ControlCommandVariant::Screenshot { .. }
+                | ControlCommandVariant::Resize { .. }
+                | ControlCommandVariant::Close
         );
 
         match command.variant {
@@ -233,13 +235,12 @@ impl AutoWC {
                     },
                 );
             }
-            ControlCommandVariant::Resize { .. } => {
-                self.complete_control_response(
+            ControlCommandVariant::Resize { width, height } => {
+                self.queue_control_action(
+                    window_id,
                     response,
-                    ControlResponse::Error("resize command is not implemented".to_string()),
+                    QueuedControlActionKind::Resize { width, height },
                 );
-                self.flush_control_responses();
-                return;
             }
             ControlCommandVariant::Close => {
                 self.queue_control_action(window_id, response, QueuedControlActionKind::Close);
@@ -323,6 +324,14 @@ impl AutoWC {
                         self.next_control_action_at = Some(Instant::now() + delay_after);
                         return;
                     }
+                }
+                QueuedControlActionKind::Resize { width, height } => {
+                    let response = match self.resize_auto_window(action.window_id, width, height) {
+                        Ok(()) => ControlResponse::Ok,
+                        Err(err) => ControlResponse::Error(err),
+                    };
+                    self.complete_control_response(action.response, response);
+                    self.flush_control_responses();
                 }
                 QueuedControlActionKind::Close => {
                     let response = match self.close_auto_window(action.window_id) {
