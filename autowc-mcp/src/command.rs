@@ -278,6 +278,20 @@ pub fn close_line(window: Option<u64>) -> Result<String, String> {
     serde_json::to_string(&value).map_err(|err| err.to_string())
 }
 
+pub fn resize_line(width: i32, height: i32, window: Option<u64>) -> Result<String, String> {
+    let mut value = serde_json::json!({
+        "type": "resize",
+        "width": width,
+        "height": height,
+    });
+
+    if let Some(window) = window {
+        value["window"] = serde_json::json!(window);
+    }
+
+    serde_json::to_string(&value).map_err(|err| err.to_string())
+}
+
 pub fn launch_line(command: &[String]) -> Result<String, String> {
     if command.is_empty() {
         return Err("launch command cannot be empty".into());
@@ -426,6 +440,18 @@ mod tests {
         assert_eq!(
             close_line(Some(5)).unwrap(),
             r#"{"type":"close","window":5}"#
+        );
+    }
+
+    #[test]
+    fn serializes_resize_command() {
+        assert_eq!(
+            resize_line(1024, 768, None).unwrap(),
+            r#"{"height":768,"type":"resize","width":1024}"#
+        );
+        assert_eq!(
+            resize_line(0, 0, Some(5)).unwrap(),
+            r#"{"height":0,"type":"resize","width":0,"window":5}"#
         );
     }
 

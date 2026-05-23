@@ -14,7 +14,9 @@ use tokio::{
     sync::Mutex,
 };
 
-use crate::command::{close_line, launch_line, list_line, screenshot_line, AutomationCommand};
+use crate::command::{
+    close_line, launch_line, list_line, resize_line, screenshot_line, AutomationCommand,
+};
 
 const STDERR_LINE_LIMIT: usize = 200;
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -165,6 +167,16 @@ impl AutoWcSession {
     pub async fn close(&self, window: Option<u64>) -> Result<(), SessionError> {
         let mut process = self.inner.lock().await;
         process.close(window).await
+    }
+
+    pub async fn resize(
+        &self,
+        window: Option<u64>,
+        width: i32,
+        height: i32,
+    ) -> Result<(), SessionError> {
+        let mut process = self.inner.lock().await;
+        process.resize(window, width, height).await
     }
 
     pub async fn shutdown(&self) {
@@ -360,6 +372,19 @@ impl AutoWcProcess {
     async fn close(&mut self, window: Option<u64>) -> Result<(), SessionError> {
         self.ensure_running().await?;
         let line = close_line(window).map_err(SessionError::new)?;
+        self.execute_plan([PlannedCommand::expect_ok(line)])
+            .await
+            .map(|_| ())
+    }
+
+    async fn resize(
+        &mut self,
+        window: Option<u64>,
+        width: i32,
+        height: i32,
+    ) -> Result<(), SessionError> {
+        self.ensure_running().await?;
+        let line = resize_line(width, height, window).map_err(SessionError::new)?;
         self.execute_plan([PlannedCommand::expect_ok(line)])
             .await
             .map(|_| ())

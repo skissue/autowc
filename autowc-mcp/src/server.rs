@@ -26,12 +26,13 @@ Typical flow:
 1. `launch` starts a process inside the server's running AutoWC compositor.
 2. `list` reports the currently open windows and their stable AutoWC window IDs.
 3. `run` sends an ordered batch of input commands, optionally targeting a specific window.
-4. `screenshot` observes the current framebuffer, optionally targeting a specific window.
-5. `close` requests that a target window's client toplevel close.
+4. `resize` fixes a target window size, or uses 0x0 to return it to dynamic sizing.
+5. `screenshot` observes the current framebuffer, optionally targeting a specific window.
+6. `close` requests that a target window's client toplevel close.
 
 The MCP server owns one AutoWC compositor session. It starts AutoWC automatically with dynamic resizing and stay-alive enabled. The `launch` tool only starts an application process inside that compositor.
 
-When more than one window is open, call `list` and then pass the desired window ID to `run`, `screenshot`, or `close`. If `window` is omitted, AutoWC uses the first existing window (lowest ID).
+When more than one window is open, call `list` and then pass the desired window ID to `run`, `resize`, `screenshot`, or `close`. If `window` is omitted, AutoWC uses the first existing window (lowest ID).
 
 Mouse coordinates are virtual-display pixels with the origin at the top-left of the target AutoWC window. Keyboard commands use W3C KeyboardEvent.code physical key names, such as KeyA, Digit1, Enter, Escape, Backspace, Tab, Space, ControlLeft, ShiftLeft, AltLeft, MetaLeft, ArrowDown, and F5. Prefer the `keys` command for keyboard input when possible as it has the most flexibility. Use `key` or `chord` only when you need lower-level primitives.
 
@@ -153,6 +154,25 @@ impl AutoWcMcpServer {
     }
 
     #[tool(
+        name = "resize",
+        description = "Resize an AutoWC window. Positive dimensions set a fixed logical size; 0x0 switches the window back to dynamic sizing. This should only be called if there is a clear need to fix a window to a specific size, or to return a window to dynamic sizing."
+    )]
+    pub async fn resize(
+        &self,
+        Parameters(params): Parameters<ResizeParams>,
+    ) -> Result<CallToolResult, String> {
+        if let Err(err) = self
+            .session
+            .resize(params.window, params.width, params.height)
+            .await
+        {
+            return Ok(error_result(err));
+        }
+
+        Ok(resize_result(params.window))
+    }
+
+    #[tool(
         name = "close",
         description = "Request that an AutoWC window's client toplevel close. This only sends a close request; the application may still decide whether and when to exit."
     )]
@@ -210,6 +230,22 @@ pub struct ScreenshotParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListParams {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ResizeParams {
+    #[schemars(
+        description = "Optional AutoWC window ID to resize. Omit to use AutoWC's default window."
+    )]
+    pub window: Option<u64>,
+    #[schemars(
+        description = "Target width in logical pixels. Use 0 with height 0 for dynamic sizing."
+    )]
+    pub width: i32,
+    #[schemars(
+        description = "Target height in logical pixels. Use 0 with width 0 for dynamic sizing."
+    )]
+    pub height: i32,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CloseParams {
@@ -314,6 +350,13 @@ fn close_result(window: Option<u64>) -> CallToolResult {
     }))
 }
 
+fn resize_result(window: Option<u64>) -> CallToolResult {
+    CallToolResult::structured(json!({
+        "ok": true,
+        "window": window,
+    }))
+}
+
 fn error_result(err: SessionError) -> CallToolResult {
     let mut result = CallToolResult::error(vec![Content::text(err.message.clone())]);
     result.structured_content = Some(json!({
@@ -335,6 +378,7 @@ mod tests {
         assert!(SERVER_INSTRUCTIONS.contains("one AutoWC compositor session"));
         assert!(SERVER_INSTRUCTIONS.contains("starts AutoWC automatically"));
         assert!(SERVER_INSTRUCTIONS.contains("call `list`"));
+        assert!(SERVER_INSTRUCTIONS.contains("0x0"));
         assert!(SERVER_INSTRUCTIONS.contains("W3C KeyboardEvent.code"));
         assert!(SERVER_INSTRUCTIONS.contains("Prefer the `keys` command"));
         assert!(!SERVER_INSTRUCTIONS.contains("return_screenshot"));
@@ -389,6 +433,16 @@ mod tests {
         let schema = serde_json::to_string(&schema).unwrap();
 
         assert!(!schema.contains("session_id"));
+    }
+
+    #[test]
+    fn resize_schema_documents_size_and_window() {
+        let schema = schemars::schema_for!(ResizeParams);
+        let schema = serde_json::to_string(&schema).unwrap();
+
+        assert!(schema.contains("Optional AutoWC window id"));
+        assert!(schema.contains("logical pixels"));
+        assert!(schema.contains("dynamic sizing"));
     }
 
     #[test]
@@ -462,6 +516,15 @@ mod tests {
         assert_eq!(structured["windows"][0]["width"], 640);
         assert_eq!(structured["windows"][0]["height"], 480);
         assert_eq!(structured["windows"][0]["fixed"], true);
+    }
+
+    #[test]
+    fn resize_result_includes_target_window() {
+        let result = resize_result(Some(7));
+        let structured = result.structured_content.unwrap();
+
+        assert_eq!(structured["ok"], true);
+        assert_eq!(structured["window"], 7);
     }
 
     #[test]
