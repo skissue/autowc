@@ -36,6 +36,10 @@ struct Cli {
     #[arg(long)]
     height: Option<i32>,
 
+    /// Start new windows at the initial virtual size instead of resizing them to the host window.
+    #[arg(long)]
+    fixed: bool,
+
     /// Keep AutoWC running after all client windows close.
     #[arg(long)]
     stay_alive: bool,
@@ -75,6 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ?output_sizing,
         ?timing,
         ?protocol,
+        default_fixed = cli.fixed,
         stay_alive = cli.stay_alive,
         "starting autowc"
     );
@@ -89,6 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut event_loop,
         display,
         output_sizing.initial_size,
+        cli.fixed,
         cli.stay_alive,
         timing,
         protocol,
@@ -216,6 +222,19 @@ mod tests {
     fn output_sizing_defaults_to_default_initial_size_without_resolution_options() {
         let cli = parse(&["autowc", "foot"]);
 
+        assert_eq!(
+            output_sizing_from_cli(&cli).unwrap(),
+            OutputSizing {
+                initial_size: Size::from((DEFAULT_INITIAL_WIDTH, DEFAULT_INITIAL_HEIGHT)),
+            }
+        );
+    }
+
+    #[test]
+    fn fixed_flag_uses_default_initial_size_without_resolution_options() {
+        let cli = parse(&["autowc", "--fixed", "foot"]);
+
+        assert!(cli.fixed);
         assert_eq!(
             output_sizing_from_cli(&cli).unwrap(),
             OutputSizing {

@@ -55,6 +55,7 @@ pub struct AutoWC {
 
     pub loop_signal: LoopSignal,
     pub initial_virtual_size: Size<i32, Logical>,
+    pub default_fixed: bool,
     pub windows: WindowRegistry,
     pub first_alive_window_id: Option<AutoWindowId>,
     pub focused_window_id: Option<AutoWindowId>,
@@ -96,6 +97,7 @@ impl AutoWC {
         event_loop: &mut EventLoop<Self>,
         display: Display<Self>,
         initial_virtual_size: Size<i32, Logical>,
+        default_fixed: bool,
         stay_alive: bool,
         timing: TimingOptions,
         protocol: Protocol,
@@ -103,6 +105,7 @@ impl AutoWC {
         let start_time = std::time::Instant::now();
         debug!(
             ?initial_virtual_size,
+            default_fixed,
             stay_alive,
             ?timing,
             ?protocol,
@@ -155,6 +158,7 @@ impl AutoWC {
             loop_signal,
             socket_name,
             initial_virtual_size,
+            default_fixed,
             windows: WindowRegistry::new(),
             first_alive_window_id: None,
             focused_window_id: None,
@@ -392,7 +396,7 @@ impl AutoWC {
         self.windows
             .get(window_id)
             .map(|window| *window.geometry())
-            .unwrap_or_else(|| WindowGeometry::new(WindowSizing::Dynamic))
+            .unwrap_or_else(|| self.default_window_geometry())
     }
 
     pub fn window_sizing(&self, window_id: AutoWindowId) -> WindowSizing {
@@ -437,10 +441,11 @@ impl AutoWC {
     pub fn map_new_toplevel(&mut self, window: Window) {
         let window_id = self.windows.create_window();
         info!(?window_id, "new toplevel");
+        let geometry = self.default_window_geometry();
         self.windows
             .get_mut(window_id)
             .expect("AutoWC window is missing")
-            .set_geometry(WindowGeometry::new(WindowSizing::Dynamic));
+            .set_geometry(geometry);
         self.create_output_for_window(window_id);
 
         self.configure_probe(&window);
@@ -454,6 +459,17 @@ impl AutoWC {
             .expect("AutoWC window is missing")
             .set_state(AutoWindowState::WaitingProbeCommit);
         self.note_window_alive(window_id);
+    }
+
+    fn default_window_geometry(&self) -> WindowGeometry {
+        let sizing = if self.default_fixed {
+            WindowSizing::Fixed {
+                size: self.initial_virtual_size,
+            }
+        } else {
+            WindowSizing::Dynamic
+        };
+        WindowGeometry::new(sizing)
     }
 
     pub fn handle_toplevel_commit(&mut self, surface: &WlSurface) {
@@ -476,10 +492,10 @@ impl AutoWC {
             .state()
         {
             AutoWindowState::WaitingProbeCommit => {
-                let preferred_size = self.preferred_toplevel_size(&window);
+                let initial_size = self.initial_host_window_size(window_id, &window);
                 if let Some(requester) = &self.host_window_requester {
-                    debug!(?window_id, ?preferred_size, "requesting host window");
-                    requester.create_window(window_id, preferred_size);
+                    debug!(?window_id, ?initial_size, "requesting host window");
+                    requester.create_window(window_id, initial_size);
                     self.windows
                         .get_mut(window_id)
                         .expect("AutoWC window is missing")
@@ -1118,6 +1134,18 @@ impl AutoWC {
             size
         } else {
             self.initial_virtual_size
+        }
+    }
+
+    fn initial_host_window_size(
+        &self,
+        window_id: AutoWindowId,
+        window: &Window,
+    ) -> Size<i32, Logical> {
+        if self.window_is_fixed(window_id) {
+            self.window_virtual_size(window_id)
+        } else {
+            self.preferred_toplevel_size(window)
         }
     }
 
