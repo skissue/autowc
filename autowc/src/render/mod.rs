@@ -82,6 +82,7 @@ impl RenderWindow {
             auto_window_id,
             host.size,
             virtual_size,
+            host.scale_factor,
             output_scale,
             fullscreen,
         );
@@ -132,6 +133,7 @@ impl RenderWindows {
             host_window_id,
             host.size,
             virtual_size,
+            host.scale_factor,
             output_scale,
             fullscreen,
         );
@@ -270,7 +272,7 @@ fn render_host_window(
     {
         let (renderer, mut framebuffer) = backend.bind(host_window_id).unwrap();
         let virtual_scale = state
-            .window_resize_policy(auto_window_id)
+            .window_geometry(auto_window_id)
             .virtual_framebuffer_scale(render_window.host_scale_factor);
         let virtual_size = state.window_virtual_size(auto_window_id);
         let virtual_buffer_size = buffer_size(virtual_size, virtual_scale);

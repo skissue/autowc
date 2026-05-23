@@ -11,36 +11,35 @@ use smithay::{
 use tracing::{debug, trace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowResizePolicy {
+pub enum WindowSizing {
     Dynamic,
-    Fixed,
+    Fixed { size: Size<i32, Logical> },
 }
 
-impl WindowResizePolicy {
-    pub fn from_dynamic_resize(dynamic_resize: bool) -> Self {
+impl WindowSizing {
+    pub fn from_dynamic_resize(dynamic_resize: bool, initial_size: Size<i32, Logical>) -> Self {
         if dynamic_resize {
             Self::Dynamic
         } else {
-            Self::Fixed
+            Self::Fixed { size: initial_size }
         }
     }
 
     pub fn is_fixed(self) -> bool {
-        self == Self::Fixed
+        matches!(self, Self::Fixed { .. })
     }
 
     pub fn virtual_size_for_host(
         self,
         host_size: Size<i32, Physical>,
         host_scale_factor: f64,
-        fixed_size: Size<i32, Logical>,
     ) -> Size<i32, Logical> {
         match self {
             Self::Dynamic => host_size
                 .to_f64()
                 .to_logical(host_scale_factor)
                 .to_i32_ceil(),
-            Self::Fixed => fixed_size,
+            Self::Fixed { size } => size,
         }
     }
 
@@ -52,14 +51,14 @@ impl WindowResizePolicy {
     ) -> (Size<i32, Physical>, f64) {
         match self {
             Self::Dynamic => (host_size, output_scale),
-            Self::Fixed => (virtual_size.to_physical(1), 1.0),
+            Self::Fixed { .. } => (virtual_size.to_physical(1), 1.0),
         }
     }
 
     pub fn virtual_framebuffer_scale(self, host_scale_factor: f64) -> f64 {
         match self {
             Self::Dynamic => host_scale_factor,
-            Self::Fixed => 1.0,
+            Self::Fixed { .. } => 1.0,
         }
     }
 
@@ -70,8 +69,108 @@ impl WindowResizePolicy {
     ) -> Size<i32, Logical> {
         match self {
             Self::Dynamic => host_size.to_logical(1),
-            Self::Fixed => virtual_size,
+            Self::Fixed { .. } => virtual_size,
         }
+    }
+
+    pub fn set_fixed_size(&mut self, size: Size<i32, Logical>) {
+        if self.is_fixed() {
+            *self = Self::Fixed { size };
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowGeometry {
+    sizing: WindowSizing,
+    host_size: Option<Size<i32, Physical>>,
+    host_scale_factor: f64,
+}
+
+impl WindowGeometry {
+    pub fn new(sizing: WindowSizing) -> Self {
+        Self {
+            sizing,
+            host_size: None,
+            host_scale_factor: 1.0,
+        }
+    }
+
+    pub fn from_dynamic_resize(dynamic_resize: bool, initial_size: Size<i32, Logical>) -> Self {
+        Self::new(WindowSizing::from_dynamic_resize(
+            dynamic_resize,
+            initial_size,
+        ))
+    }
+
+    pub fn sizing(&self) -> WindowSizing {
+        self.sizing
+    }
+
+    pub fn set_sizing(&mut self, sizing: WindowSizing) {
+        self.sizing = sizing;
+    }
+
+    pub fn is_fixed(&self) -> bool {
+        self.sizing.is_fixed()
+    }
+
+    pub fn host_size(&self) -> Option<Size<i32, Physical>> {
+        self.host_size
+    }
+
+    pub fn host_scale_factor(&self) -> f64 {
+        self.host_scale_factor
+    }
+
+    pub fn set_host(&mut self, size: Size<i32, Physical>, scale_factor: f64) {
+        self.host_size = Some(size);
+        self.host_scale_factor = scale_factor;
+    }
+
+    pub fn set_virtual_size(&mut self, size: Size<i32, Logical>) {
+        self.sizing.set_fixed_size(size);
+    }
+
+    pub fn virtual_size(&self, fallback_size: Size<i32, Logical>) -> Size<i32, Logical> {
+        match self.host_size {
+            Some(host_size) => self.virtual_size_for_host(host_size, self.host_scale_factor),
+            None => match self.sizing {
+                WindowSizing::Dynamic => fallback_size,
+                WindowSizing::Fixed { size } => size,
+            },
+        }
+    }
+
+    pub fn virtual_size_for_host(
+        &self,
+        host_size: Size<i32, Physical>,
+        host_scale_factor: f64,
+    ) -> Size<i32, Logical> {
+        self.sizing
+            .virtual_size_for_host(host_size, host_scale_factor)
+    }
+
+    pub fn output_mode(
+        &self,
+        host_size: Size<i32, Physical>,
+        virtual_size: Size<i32, Logical>,
+        output_scale: f64,
+    ) -> (Size<i32, Physical>, f64) {
+        self.sizing
+            .output_mode(host_size, virtual_size, output_scale)
+    }
+
+    pub fn virtual_framebuffer_scale(&self, host_scale_factor: f64) -> f64 {
+        self.sizing.virtual_framebuffer_scale(host_scale_factor)
+    }
+
+    pub fn final_pass_logical_size(
+        &self,
+        host_size: Size<i32, Physical>,
+        virtual_size: Size<i32, Logical>,
+    ) -> Size<i32, Logical> {
+        self.sizing.final_pass_logical_size(host_size, virtual_size)
     }
 }
 
@@ -169,9 +268,7 @@ pub struct AutoWindow {
     space: Space<Window>,
     host_window_id: Option<HostWindowId>,
     output: Option<Output>,
-    // TODO: Add fixed-size presentation and pointer viewport state here when fixed sizing returns.
-    host_size: Option<Size<i32, Physical>>,
-    virtual_size: Option<Size<i32, Logical>>,
+    geometry: WindowGeometry,
     host_fullscreen: bool,
     state: AutoWindowState,
     primary_window: Option<Window>,
@@ -185,8 +282,7 @@ impl AutoWindow {
             space: Space::default(),
             host_window_id: None,
             output: None,
-            host_size: None,
-            virtual_size: None,
+            geometry: WindowGeometry::new(WindowSizing::Dynamic),
             host_fullscreen: false,
             state: AutoWindowState::Empty,
             primary_window: None,
@@ -218,12 +314,39 @@ impl AutoWindow {
         self.output.as_ref()
     }
 
+    pub fn geometry(&self) -> &WindowGeometry {
+        &self.geometry
+    }
+
+    pub fn set_geometry(&mut self, geometry: WindowGeometry) {
+        trace!(id = ?self.id, ?geometry, "setting window geometry");
+        self.geometry = geometry;
+    }
+
+    pub fn sizing(&self) -> WindowSizing {
+        self.geometry.sizing()
+    }
+
+    pub fn set_sizing(&mut self, sizing: WindowSizing) {
+        trace!(id = ?self.id, ?sizing, "setting window sizing");
+        self.geometry.set_sizing(sizing);
+    }
+
+    pub fn is_fixed(&self) -> bool {
+        self.geometry.is_fixed()
+    }
+
     pub fn virtual_size(&self) -> Option<Size<i32, Logical>> {
-        self.virtual_size
+        match (self.geometry.host_size(), self.sizing()) {
+            (Some(_), _) | (None, WindowSizing::Fixed { .. }) => {
+                Some(self.geometry.virtual_size(Size::from((0, 0))))
+            }
+            (None, WindowSizing::Dynamic) => None,
+        }
     }
 
     pub fn host_size(&self) -> Option<Size<i32, Physical>> {
-        self.host_size
+        self.geometry.host_size()
     }
 
     pub fn host_fullscreen(&self) -> bool {
@@ -258,6 +381,7 @@ impl AutoWindow {
         host_window_id: HostWindowId,
         host_size: Size<i32, Physical>,
         virtual_size: Size<i32, Logical>,
+        host_scale_factor: f64,
         host_fullscreen: bool,
     ) {
         trace!(
@@ -265,23 +389,24 @@ impl AutoWindow {
             ?host_window_id,
             ?host_size,
             ?virtual_size,
+            host_scale_factor,
             host_fullscreen,
             "setting host window"
         );
         self.host_window_id = Some(host_window_id);
-        self.host_size = Some(host_size);
-        self.virtual_size = Some(virtual_size);
+        self.geometry.set_host(host_size, host_scale_factor);
+        self.geometry.set_virtual_size(virtual_size);
         self.host_fullscreen = host_fullscreen;
     }
 
-    pub fn set_host_size(&mut self, host_size: Size<i32, Physical>) {
-        trace!(id = ?self.id, ?host_size, "setting host size");
-        self.host_size = Some(host_size);
+    pub fn set_host_geometry(&mut self, host_size: Size<i32, Physical>, scale_factor: f64) {
+        trace!(id = ?self.id, ?host_size, scale_factor, "setting host geometry");
+        self.geometry.set_host(host_size, scale_factor);
     }
 
     pub fn set_virtual_size(&mut self, virtual_size: Size<i32, Logical>) {
         trace!(id = ?self.id, ?virtual_size, "setting virtual size");
-        self.virtual_size = Some(virtual_size);
+        self.geometry.set_virtual_size(virtual_size);
     }
 
     pub fn set_host_fullscreen(&mut self, fullscreen: bool) -> bool {
@@ -384,53 +509,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resize_policy_tracks_legacy_dynamic_resize_flag() {
+    fn window_sizing_tracks_legacy_dynamic_resize_flag() {
         assert_eq!(
-            WindowResizePolicy::from_dynamic_resize(true),
-            WindowResizePolicy::Dynamic
+            WindowSizing::from_dynamic_resize(true, Size::from((800, 600))),
+            WindowSizing::Dynamic
         );
         assert_eq!(
-            WindowResizePolicy::from_dynamic_resize(false),
-            WindowResizePolicy::Fixed
+            WindowSizing::from_dynamic_resize(false, Size::from((800, 600))),
+            WindowSizing::Fixed {
+                size: Size::from((800, 600))
+            }
         );
     }
 
     #[test]
-    fn dynamic_resize_policy_uses_host_size() {
-        let policy = WindowResizePolicy::Dynamic;
+    fn dynamic_window_geometry_uses_host_size() {
+        let mut geometry = WindowGeometry::new(WindowSizing::Dynamic);
+        geometry.set_host(Size::from((2400, 1350)), 1.25);
 
-        assert!(!policy.is_fixed());
+        assert!(!geometry.is_fixed());
         assert_eq!(
-            policy.virtual_size_for_host(Size::from((2400, 1350)), 1.25, Size::from((800, 600))),
+            geometry.virtual_size(Size::from((800, 600))),
             Size::from((1920, 1080))
         );
         assert_eq!(
-            policy.output_mode(Size::from((2400, 1350)), Size::from((800, 600)), 1.25),
+            geometry.output_mode(Size::from((2400, 1350)), Size::from((1920, 1080)), 1.25),
             (Size::from((2400, 1350)), 1.25)
         );
-        assert_eq!(policy.virtual_framebuffer_scale(1.25), 1.25);
+        assert_eq!(geometry.virtual_framebuffer_scale(1.25), 1.25);
         assert_eq!(
-            policy.final_pass_logical_size(Size::from((2400, 1350)), Size::from((800, 600))),
+            geometry.final_pass_logical_size(Size::from((2400, 1350)), Size::from((1920, 1080))),
             Size::from((2400, 1350))
         );
     }
 
     #[test]
-    fn fixed_resize_policy_preserves_virtual_size() {
-        let policy = WindowResizePolicy::Fixed;
+    fn fixed_window_geometry_preserves_virtual_size() {
+        let mut geometry = WindowGeometry::new(WindowSizing::Fixed {
+            size: Size::from((800, 600)),
+        });
+        geometry.set_host(Size::from((2400, 1350)), 1.25);
 
-        assert!(policy.is_fixed());
+        assert!(geometry.is_fixed());
         assert_eq!(
-            policy.virtual_size_for_host(Size::from((2400, 1350)), 1.25, Size::from((800, 600))),
+            geometry.virtual_size(Size::from((1280, 720))),
             Size::from((800, 600))
         );
         assert_eq!(
-            policy.output_mode(Size::from((2400, 1350)), Size::from((800, 600)), 1.25),
+            geometry.output_mode(Size::from((2400, 1350)), Size::from((800, 600)), 1.25),
             (Size::from((800, 600)), 1.0)
         );
-        assert_eq!(policy.virtual_framebuffer_scale(1.25), 1.0);
+        assert_eq!(geometry.virtual_framebuffer_scale(1.25), 1.0);
         assert_eq!(
-            policy.final_pass_logical_size(Size::from((2400, 1350)), Size::from((800, 600))),
+            geometry.final_pass_logical_size(Size::from((2400, 1350)), Size::from((800, 600))),
             Size::from((800, 600))
         );
     }

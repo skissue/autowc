@@ -38,7 +38,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     host::HostWindowRequester,
     protocol::{ControlResponse, Protocol, WindowInfo},
-    window::{AutoWindowId, AutoWindowState, WindowRegistry, WindowResizePolicy},
+    window::{AutoWindowId, AutoWindowState, WindowGeometry, WindowRegistry, WindowSizing},
 };
 
 mod clipboard;
@@ -392,12 +392,21 @@ impl AutoWC {
         Some(Point::from((x / scale_x, y / scale_y)))
     }
 
-    pub fn window_resize_policy(&self, _window_id: AutoWindowId) -> WindowResizePolicy {
-        WindowResizePolicy::from_dynamic_resize(self.dynamic_resize)
+    pub fn window_geometry(&self, window_id: AutoWindowId) -> WindowGeometry {
+        self.windows
+            .get(window_id)
+            .map(|window| *window.geometry())
+            .unwrap_or_else(|| {
+                WindowGeometry::from_dynamic_resize(self.dynamic_resize, self.initial_virtual_size)
+            })
+    }
+
+    pub fn window_sizing(&self, window_id: AutoWindowId) -> WindowSizing {
+        self.window_geometry(window_id).sizing()
     }
 
     pub fn window_is_fixed(&self, window_id: AutoWindowId) -> bool {
-        self.window_resize_policy(window_id).is_fixed()
+        self.window_geometry(window_id).is_fixed()
     }
 
     pub fn virtual_size_for_host_resize(
@@ -406,11 +415,8 @@ impl AutoWC {
         host_size: Size<i32, Physical>,
         host_scale_factor: f64,
     ) -> Size<i32, Logical> {
-        self.window_resize_policy(window_id).virtual_size_for_host(
-            host_size,
-            host_scale_factor,
-            self.initial_virtual_size,
-        )
+        self.window_geometry(window_id)
+            .virtual_size_for_host(host_size, host_scale_factor)
     }
 
     pub fn output_mode_for_window(
@@ -420,7 +426,7 @@ impl AutoWC {
         virtual_size: Size<i32, Logical>,
         output_scale: f64,
     ) -> (Size<i32, Physical>, f64) {
-        self.window_resize_policy(window_id)
+        self.window_geometry(window_id)
             .output_mode(host_size, virtual_size, output_scale)
     }
 
@@ -430,13 +436,20 @@ impl AutoWC {
         host_size: Size<i32, Physical>,
         virtual_size: Size<i32, Logical>,
     ) -> Size<i32, Logical> {
-        self.window_resize_policy(window_id)
+        self.window_geometry(window_id)
             .final_pass_logical_size(host_size, virtual_size)
     }
 
     pub fn map_new_toplevel(&mut self, window: Window) {
         let window_id = self.windows.create_window();
         info!(?window_id, "new toplevel");
+        self.windows
+            .get_mut(window_id)
+            .expect("AutoWC window is missing")
+            .set_geometry(WindowGeometry::from_dynamic_resize(
+                self.dynamic_resize,
+                self.initial_virtual_size,
+            ));
         self.create_output_for_window(window_id);
 
         self.configure_probe(&window);
@@ -513,6 +526,7 @@ impl AutoWC {
         host_window_id: HostWindowId,
         host_size: Size<i32, Physical>,
         virtual_size: Size<i32, Logical>,
+        host_scale_factor: f64,
         output_scale: f64,
         fullscreen: bool,
     ) {
@@ -528,12 +542,19 @@ impl AutoWC {
         self.windows
             .get_mut(window_id)
             .expect("AutoWC window is missing")
-            .set_host_window(host_window_id, host_size, virtual_size, fullscreen);
+            .set_host_window(
+                host_window_id,
+                host_size,
+                virtual_size,
+                host_scale_factor,
+                fullscreen,
+            );
         info!(
             ?window_id,
             ?host_window_id,
             ?host_size,
             ?virtual_size,
+            host_scale_factor,
             output_scale,
             fullscreen,
             "bound host window"
@@ -559,6 +580,7 @@ impl AutoWC {
         window_id: AutoWindowId,
         host_size: Size<i32, Physical>,
         virtual_size: Size<i32, Logical>,
+        host_scale_factor: f64,
         output_scale: f64,
         fullscreen: bool,
     ) {
@@ -575,6 +597,7 @@ impl AutoWC {
             ?window_id,
             ?host_size,
             ?virtual_size,
+            host_scale_factor,
             output_scale,
             fullscreen,
             "resizing window"
@@ -583,7 +606,7 @@ impl AutoWC {
             .windows
             .get_mut(window_id)
             .expect("AutoWC window is missing");
-        auto_window.set_host_size(host_size);
+        auto_window.set_host_geometry(host_size, host_scale_factor);
         auto_window.set_virtual_size(virtual_size);
         auto_window.set_host_fullscreen(fullscreen);
         self.update_window_output(window_id, host_size, virtual_size, output_scale);
