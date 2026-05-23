@@ -476,9 +476,7 @@ fn autowc_args(config: &AutoWcSessionConfig) -> Vec<String> {
         resolve_output_sizing(config).expect("invalid AutoWC session output sizing");
     let mut args = vec!["--json".into()];
 
-    if output_sizing.dynamic_resize {
-        args.push("--dynamic-resize".into());
-    } else {
+    if !output_sizing.dynamic_resize {
         args.push("--width".into());
         args.push(output_sizing.width.to_string());
         args.push("--height".into());
@@ -883,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn omits_unset_launch_timing_options() {
+    fn omits_unset_launch_timing_options_and_default_sizing_args() {
         let args = autowc_args(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["foot".into()],
@@ -897,11 +895,11 @@ mod tests {
             command_interval_ms: None,
         });
 
-        assert_eq!(args, ["--json", "--dynamic-resize", "foot"]);
+        assert_eq!(args, ["--json", "foot"]);
     }
 
     #[test]
-    fn builds_dynamic_launch_args_when_requested_explicitly() {
+    fn omits_obsolete_dynamic_resize_flag_when_requested_explicitly() {
         let args = autowc_args(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["foot".into()],
@@ -915,7 +913,7 @@ mod tests {
             command_interval_ms: None,
         });
 
-        assert_eq!(args, ["--json", "--dynamic-resize", "foot"]);
+        assert_eq!(args, ["--json", "foot"]);
     }
 
     #[test]
