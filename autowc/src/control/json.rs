@@ -4,7 +4,9 @@ use serde::Deserialize;
 
 use crate::input::keyboard::{key_to_code, keys_sequence::parse_keys_sequence};
 
-use super::{parse_button, ControlCommand, ControlCommandVariant, PressAction, BTN_LEFT};
+use super::{
+    parse_button, parse_positive_i32, ControlCommand, ControlCommandVariant, PressAction, BTN_LEFT,
+};
 
 pub fn parse_json_control_line(line: &str) -> Result<Option<ControlCommand>, String> {
     let line = line.trim();
@@ -72,6 +74,10 @@ enum JsonControlCommandVariant {
     },
     Screenshot {
         path: Option<PathBuf>,
+    },
+    Resize {
+        width: i32,
+        height: i32,
     },
     Sleep {
         ms: u64,
@@ -142,6 +148,10 @@ impl JsonControlCommand {
             JsonControlCommandVariant::Screenshot { path } => {
                 ControlCommandVariant::Screenshot { path }
             }
+            JsonControlCommandVariant::Resize { width, height } => ControlCommandVariant::Resize {
+                width: validate_json_positive_i32(width, "width")?,
+                height: validate_json_positive_i32(height, "height")?,
+            },
             JsonControlCommandVariant::Sleep { ms } => {
                 ControlCommandVariant::Sleep { duration_ms: ms }
             }
@@ -196,4 +206,8 @@ fn parse_json_button(button: Option<JsonMouseButton>) -> Result<u32, String> {
         Some(JsonMouseButton::Code(button)) => Ok(button),
         None => Ok(BTN_LEFT),
     }
+}
+
+fn validate_json_positive_i32(value: i32, name: &str) -> Result<i32, String> {
+    parse_positive_i32(Some(&value.to_string()), name)
 }

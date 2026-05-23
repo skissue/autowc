@@ -233,6 +233,14 @@ impl AutoWC {
                     },
                 );
             }
+            ControlCommandVariant::Resize { .. } => {
+                self.complete_control_response(
+                    response,
+                    ControlResponse::Error("resize command is not implemented".to_string()),
+                );
+                self.flush_control_responses();
+                return;
+            }
             ControlCommandVariant::Close => {
                 self.queue_control_action(window_id, response, QueuedControlActionKind::Close);
             }

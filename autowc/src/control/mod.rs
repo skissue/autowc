@@ -88,6 +88,10 @@ pub enum ControlCommandVariant {
     Screenshot {
         path: Option<PathBuf>,
     },
+    Resize {
+        width: i32,
+        height: i32,
+    },
     Sleep {
         duration_ms: u64,
     },
@@ -175,6 +179,17 @@ fn parse_f64(value: Option<&str>, name: &str) -> Result<f64, String> {
         .ok_or_else(|| format!("expected {name}"))?
         .parse::<f64>()
         .map_err(|_| format!("invalid {name}"))
+}
+
+fn parse_positive_i32(value: Option<&str>, name: &str) -> Result<i32, String> {
+    let value = value
+        .ok_or_else(|| format!("expected {name}"))?
+        .parse::<i32>()
+        .map_err(|_| format!("invalid {name}"))?;
+    if value <= 0 {
+        return Err(format!("{name} must be positive"));
+    }
+    Ok(value)
 }
 
 fn ensure_no_extra<'a>(mut parts: impl Iterator<Item = &'a str>) -> Result<(), String> {
@@ -380,6 +395,31 @@ mod tests {
                 path: Some(PathBuf::from("/tmp/autowc.png")),
             })
         );
+    }
+
+    #[test]
+    fn parses_resize() {
+        assert_eq!(
+            parse_control_command("resize 1024 768").unwrap(),
+            command(ControlCommandVariant::Resize {
+                width: 1024,
+                height: 768,
+            })
+        );
+        assert_eq!(
+            parse_control_command("2 resize 800 600").unwrap(),
+            targeted_command(
+                2,
+                ControlCommandVariant::Resize {
+                    width: 800,
+                    height: 600,
+                }
+            )
+        );
+        assert!(parse_control_command("resize 1024").is_err());
+        assert!(parse_control_command("resize 0 768").is_err());
+        assert!(parse_control_command("resize 1024 -1").is_err());
+        assert!(parse_control_command("resize 1024 768 extra").is_err());
     }
 
     #[test]
@@ -684,6 +724,13 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_json_control_command(r#"{"type":"resize","width":1024,"height":768}"#).unwrap(),
+            ControlCommandVariant::Resize {
+                width: 1024,
+                height: 768,
+            }
+        );
+        assert_eq!(
             parse_json_control_command(r#"{"type":"quit"}"#).unwrap(),
             ControlCommandVariant::Quit
         );
@@ -706,6 +753,17 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_json_control_command(r#"{"type":"resize","window":3,"width":800,"height":600}"#)
+                .unwrap(),
+            ControlCommand {
+                window: Some(3),
+                variant: ControlCommandVariant::Resize {
+                    width: 800,
+                    height: 600,
+                },
+            }
+        );
+        assert_eq!(
             parse_json_control_command(r#"{"type":"close","window":4}"#).unwrap(),
             ControlCommand {
                 window: Some(4),
@@ -723,5 +781,9 @@ mod tests {
         assert!(parse_json_control_command(r#"{"type":"launch","command":[]}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"mouse_button","action":"tap"}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"sleep","ms":-1}"#).is_err());
+        assert!(parse_json_control_command(r#"{"type":"resize","width":0,"height":768}"#).is_err());
+        assert!(
+            parse_json_control_command(r#"{"type":"resize","width":1024,"height":-1}"#).is_err()
+        );
     }
 }

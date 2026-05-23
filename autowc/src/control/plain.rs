@@ -3,8 +3,8 @@ use std::{ffi::OsString, path::PathBuf};
 use crate::input::keyboard::{key_to_code, keys_sequence::parse_keys_sequence};
 
 use super::{
-    ensure_no_extra, parse_button, parse_f64, parse_press_action, ControlCommand,
-    ControlCommandVariant, PressAction, BTN_LEFT,
+    ensure_no_extra, parse_button, parse_f64, parse_positive_i32, parse_press_action,
+    ControlCommand, ControlCommandVariant, PressAction, BTN_LEFT,
 };
 
 pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, String> {
@@ -53,6 +53,7 @@ pub fn parse_control_command(line: &str) -> Result<Option<ControlCommand>, Strin
         "click" => parse_click(parts),
         "scroll" => parse_scroll(parts),
         "screenshot" => parse_screenshot(parts),
+        "resize" => parse_resize(parts),
         "sleep" => parse_sleep(parts),
         "launch" => parse_launch(parts),
         "list" => parse_list(parts),
@@ -216,6 +217,19 @@ fn parse_screenshot<'a>(
     Ok(Some(ControlCommand::new(
         ControlCommandVariant::Screenshot { path },
     )))
+}
+
+fn parse_resize<'a>(
+    mut parts: impl Iterator<Item = &'a str>,
+) -> Result<Option<ControlCommand>, String> {
+    let width = parse_positive_i32(parts.next(), "width")?;
+    let height = parse_positive_i32(parts.next(), "height")?;
+    ensure_no_extra(parts)?;
+
+    Ok(Some(ControlCommand::new(ControlCommandVariant::Resize {
+        width,
+        height,
+    })))
 }
 
 fn parse_sleep<'a>(
