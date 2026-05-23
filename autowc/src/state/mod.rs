@@ -638,11 +638,13 @@ impl AutoWC {
         width: i32,
         height: i32,
     ) -> Result<(), String> {
-        if width <= 0 || height <= 0 {
-            return Err("width and height must be positive".to_string());
+        if width < 0 || height < 0 {
+            return Err("width and height must be non-negative".to_string());
+        }
+        if !((width == 0 && height == 0) || (width > 0 && height > 0)) {
+            return Err("width and height must both be positive or both be zero".to_string());
         }
 
-        let virtual_size = Size::from((width, height));
         let Some(window) = self
             .windows
             .get(window_id)
@@ -652,13 +654,22 @@ impl AutoWC {
             return Err(format!("unknown window: {}", window_id.raw()));
         };
 
-        info!(?window_id, ?virtual_size, "resizing auto window");
         let host_size = self.window_host_size(window_id);
         let host_scale_factor = self.window_geometry(window_id).host_scale_factor();
+        let sizing = if width == 0 {
+            WindowSizing::Dynamic
+        } else {
+            WindowSizing::Fixed {
+                size: Size::from((width, height)),
+            }
+        };
+        let virtual_size = sizing.virtual_size_for_host(host_size, host_scale_factor);
+
+        info!(?window_id, ?sizing, ?virtual_size, "resizing auto window");
         self.windows
             .get_mut(window_id)
             .expect("AutoWC window is missing")
-            .set_sizing(WindowSizing::Fixed { size: virtual_size });
+            .set_sizing(sizing);
         let (_, output_scale) =
             self.output_mode_for_window(window_id, host_size, virtual_size, host_scale_factor);
         self.update_window_output(window_id, host_size, virtual_size, output_scale);

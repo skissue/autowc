@@ -181,15 +181,23 @@ fn parse_f64(value: Option<&str>, name: &str) -> Result<f64, String> {
         .map_err(|_| format!("invalid {name}"))
 }
 
-fn parse_positive_i32(value: Option<&str>, name: &str) -> Result<i32, String> {
+fn parse_nonnegative_i32(value: Option<&str>, name: &str) -> Result<i32, String> {
     let value = value
         .ok_or_else(|| format!("expected {name}"))?
         .parse::<i32>()
         .map_err(|_| format!("invalid {name}"))?;
-    if value <= 0 {
-        return Err(format!("{name} must be positive"));
+    if value < 0 {
+        return Err(format!("{name} must be non-negative"));
     }
     Ok(value)
+}
+
+fn validate_resize_dimensions(width: i32, height: i32) -> Result<(), String> {
+    if (width == 0 && height == 0) || (width > 0 && height > 0) {
+        Ok(())
+    } else {
+        Err("width and height must both be positive or both be zero".to_string())
+    }
 }
 
 fn ensure_no_extra<'a>(mut parts: impl Iterator<Item = &'a str>) -> Result<(), String> {
@@ -416,8 +424,16 @@ mod tests {
                 }
             )
         );
+        assert_eq!(
+            parse_control_command("resize 0 0").unwrap(),
+            command(ControlCommandVariant::Resize {
+                width: 0,
+                height: 0,
+            })
+        );
         assert!(parse_control_command("resize 1024").is_err());
         assert!(parse_control_command("resize 0 768").is_err());
+        assert!(parse_control_command("resize 1024 0").is_err());
         assert!(parse_control_command("resize 1024 -1").is_err());
         assert!(parse_control_command("resize 1024 768 extra").is_err());
     }
@@ -731,6 +747,13 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_json_control_command(r#"{"type":"resize","width":0,"height":0}"#).unwrap(),
+            ControlCommandVariant::Resize {
+                width: 0,
+                height: 0,
+            }
+        );
+        assert_eq!(
             parse_json_control_command(r#"{"type":"quit"}"#).unwrap(),
             ControlCommandVariant::Quit
         );
@@ -782,6 +805,9 @@ mod tests {
         assert!(parse_json_control_command(r#"{"type":"mouse_button","action":"tap"}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"sleep","ms":-1}"#).is_err());
         assert!(parse_json_control_command(r#"{"type":"resize","width":0,"height":768}"#).is_err());
+        assert!(
+            parse_json_control_command(r#"{"type":"resize","width":1024,"height":0}"#).is_err()
+        );
         assert!(
             parse_json_control_command(r#"{"type":"resize","width":1024,"height":-1}"#).is_err()
         );
