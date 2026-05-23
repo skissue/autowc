@@ -452,6 +452,7 @@ mod tests {
             title: "Dialog".into(),
             width: 640,
             height: 480,
+            fixed: true,
         }]);
 
         let structured = result.structured_content.unwrap();
@@ -460,6 +461,7 @@ mod tests {
         assert_eq!(structured["windows"][0]["title"], "Dialog");
         assert_eq!(structured["windows"][0]["width"], 640);
         assert_eq!(structured["windows"][0]["height"], 480);
+        assert_eq!(structured["windows"][0]["fixed"], true);
     }
 
     #[test]

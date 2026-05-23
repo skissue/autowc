@@ -41,6 +41,7 @@ pub struct WindowInfo {
     pub title: String,
     pub width: i32,
     pub height: i32,
+    pub fixed: bool,
 }
 
 #[derive(Debug)]
@@ -740,7 +741,7 @@ mod tests {
     #[test]
     fn parses_window_list_response() {
         let response = parse_response(
-            r#"{"ok":true,"windows":[{"id":2,"title":"Dialog","width":640,"height":480}]}"#,
+            r#"{"ok":true,"windows":[{"id":2,"title":"Dialog","width":640,"height":480,"fixed":true}]}"#,
         )
         .unwrap();
         match response {
@@ -752,6 +753,7 @@ mod tests {
                         title: "Dialog".into(),
                         width: 640,
                         height: 480,
+                        fixed: true,
                     }]
                 );
             }
