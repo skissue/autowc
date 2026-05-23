@@ -59,10 +59,6 @@ impl AutoWcMcpServer {
             autowc_binary,
             command: vec!["true".into()],
             stay_alive: true,
-            key_event_interval_ms: None,
-            chord_key_interval_ms: None,
-            chord_hold_ms: None,
-            command_interval_ms: None,
         })
         .await?;
 

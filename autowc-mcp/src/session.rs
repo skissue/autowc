@@ -26,10 +26,6 @@ pub struct AutoWcSessionConfig {
     pub autowc_binary: PathBuf,
     pub command: Vec<String>,
     pub stay_alive: bool,
-    pub key_event_interval_ms: Option<u64>,
-    pub chord_key_interval_ms: Option<u64>,
-    pub chord_hold_ms: Option<u64>,
-    pub command_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -472,31 +468,8 @@ fn autowc_args(config: &AutoWcSessionConfig) -> Vec<String> {
     if config.stay_alive {
         args.push("--stay-alive".into());
     }
-    push_optional_ms_arg(
-        &mut args,
-        "--key-event-interval-ms",
-        config.key_event_interval_ms,
-    );
-    push_optional_ms_arg(
-        &mut args,
-        "--chord-key-interval-ms",
-        config.chord_key_interval_ms,
-    );
-    push_optional_ms_arg(&mut args, "--chord-hold-ms", config.chord_hold_ms);
-    push_optional_ms_arg(
-        &mut args,
-        "--command-interval-ms",
-        config.command_interval_ms,
-    );
     args.extend(config.command.clone());
     args
-}
-
-fn push_optional_ms_arg(args: &mut Vec<String>, flag: &str, value: Option<u64>) {
-    if let Some(value) = value {
-        args.push(flag.into());
-        args.push(value.to_string());
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -787,45 +760,22 @@ mod tests {
     }
 
     #[test]
-    fn builds_launch_args_with_timing_options() {
+    fn builds_launch_args_with_stay_alive() {
         let args = autowc_args(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["gtk4-demo".into()],
             stay_alive: true,
-            key_event_interval_ms: Some(25),
-            chord_key_interval_ms: Some(10),
-            chord_hold_ms: Some(90),
-            command_interval_ms: Some(5),
         });
 
-        assert_eq!(
-            args,
-            [
-                "--json",
-                "--stay-alive",
-                "--key-event-interval-ms",
-                "25",
-                "--chord-key-interval-ms",
-                "10",
-                "--chord-hold-ms",
-                "90",
-                "--command-interval-ms",
-                "5",
-                "gtk4-demo",
-            ]
-        );
+        assert_eq!(args, ["--json", "--stay-alive", "gtk4-demo"]);
     }
 
     #[test]
-    fn omits_unset_launch_timing_options_and_default_sizing_args() {
+    fn omits_default_sizing_args() {
         let args = autowc_args(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["foot".into()],
             stay_alive: false,
-            key_event_interval_ms: None,
-            chord_key_interval_ms: None,
-            chord_hold_ms: None,
-            command_interval_ms: None,
         });
 
         assert_eq!(args, ["--json", "foot"]);
