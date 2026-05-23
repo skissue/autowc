@@ -186,7 +186,7 @@ pub struct LaunchParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunParams {
     #[schemars(
-        description = "Ordered automation command batch. Command types are key, chord, keys, mouse_move, mouse_button, click, scroll, and sleep."
+        description = "Ordered automation command batch. Command types are key, chord, keys, mouse_move, mouse_button, click, mouse_drag, scroll, and sleep."
     )]
     pub commands: Vec<AutomationCommand>,
     #[schemars(
@@ -370,6 +370,7 @@ mod tests {
 
         assert!(schema.contains("Ordered automation command batch"));
         assert!(schema.contains("key, chord, keys"));
+        assert!(schema.contains("mouse_drag"));
         assert!(!schema.contains("text, keys"));
         assert!(schema.contains("Optional AutoWC window id"));
         assert!(schema.contains("Defaults to true"));

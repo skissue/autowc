@@ -55,6 +55,20 @@ pub enum AutomationCommand {
         #[serde(default)]
         button: MouseButton,
     },
+    #[schemars(description = "Drag from one virtual-display coordinate to another.")]
+    MouseDrag {
+        #[schemars(description = "Starting x coordinate in pixels.")]
+        start_x: f64,
+        #[schemars(description = "Starting y coordinate in pixels.")]
+        start_y: f64,
+        #[schemars(description = "Ending x coordinate in pixels.")]
+        end_x: f64,
+        #[schemars(description = "Ending y coordinate in pixels.")]
+        end_y: f64,
+        #[schemars(description = "Mouse button to hold during the drag. Defaults to left.")]
+        #[serde(default)]
+        button: MouseButton,
+    },
     #[schemars(
         description = "Send a mouse wheel scroll event. Amounts are wheel detents: 1.0 is one wheel notch, 0.5 is half a notch, and 3.0 is a medium scroll."
     )]
@@ -116,6 +130,20 @@ impl AutomationCommand {
                 "type": "click",
                 "x": x,
                 "y": y,
+                "button": button,
+            }),
+            Self::MouseDrag {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                button,
+            } => serde_json::json!({
+                "type": "mouse_drag",
+                "start_x": start_x,
+                "start_y": start_y,
+                "end_x": end_x,
+                "end_y": end_y,
                 "button": button,
             }),
             Self::Scroll { dx, dy } => serde_json::json!({
@@ -305,6 +333,35 @@ mod tests {
     }
 
     #[test]
+    fn serializes_mouse_drag() {
+        let command = AutomationCommand::MouseDrag {
+            start_x: 10.0,
+            start_y: 20.0,
+            end_x: 30.0,
+            end_y: 40.0,
+            button: MouseButton::default(),
+        };
+
+        assert_eq!(
+            command.to_autowc_line(None).unwrap(),
+            r#"{"button":"left","end_x":30.0,"end_y":40.0,"start_x":10.0,"start_y":20.0,"type":"mouse_drag"}"#
+        );
+
+        let command = AutomationCommand::MouseDrag {
+            start_x: 10.0,
+            start_y: 20.0,
+            end_x: 30.0,
+            end_y: 40.0,
+            button: MouseButton::Named(NamedMouseButton::Right),
+        };
+
+        assert_eq!(
+            command.to_autowc_line(Some(2)).unwrap(),
+            r#"{"button":"right","end_x":30.0,"end_y":40.0,"start_x":10.0,"start_y":20.0,"type":"mouse_drag","window":2}"#
+        );
+    }
+
+    #[test]
     fn deserializes_named_and_numbered_mouse_buttons() {
         let named: MouseButton = serde_json::from_str("\"right\"").unwrap();
         let numbered: MouseButton = serde_json::from_str("273").unwrap();
@@ -392,6 +449,8 @@ mod tests {
         assert!(schema.contains("waits 500 ms"));
         assert!(schema.contains("lowercase s for Super"));
         assert!(schema.contains("Virtual-display x coordinate"));
+        assert!(schema.contains("Drag from one virtual-display coordinate"));
+        assert!(schema.contains("Starting x coordinate"));
         assert!(schema.contains("wheel detents"));
         assert!(schema.contains("3.0 is a medium scroll"));
         assert!(schema.contains("Sleep duration in whole milliseconds"));
