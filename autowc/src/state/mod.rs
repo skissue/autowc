@@ -982,6 +982,7 @@ impl AutoWC {
             title,
             width: size.w,
             height: size.h,
+            fixed: self.window_is_fixed(window_id),
         })
     }
 

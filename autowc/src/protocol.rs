@@ -93,6 +93,7 @@ pub struct WindowInfo {
     pub title: String,
     pub width: i32,
     pub height: i32,
+    pub fixed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,9 +153,10 @@ mod tests {
                     title: "GTK Demo".to_string(),
                     width: 800,
                     height: 600,
+                    fixed: false,
                 }],
             }),
-            r#"{"ok":true,"windows":[{"id":2,"title":"GTK Demo","width":800,"height":600}]}"#
+            r#"{"ok":true,"windows":[{"id":2,"title":"GTK Demo","width":800,"height":600,"fixed":false}]}"#
         );
     }
 
@@ -168,12 +170,14 @@ mod tests {
                     title: "GTK Demo".to_string(),
                     width: 800,
                     height: 600,
+                    fixed: false,
                 },
                 WindowInfo {
                     id: 3,
                     title: "Dialog".to_string(),
                     width: 640,
                     height: 480,
+                    fixed: true,
                 },
             ]),
             "2 \"GTK Demo\" 3 \"Dialog\""
@@ -202,8 +206,9 @@ mod tests {
                 title: "GTK Demo".to_string(),
                 width: 800,
                 height: 600,
+                fixed: true,
             }]),
-            r#"{"ok":true,"windows":[{"id":2,"title":"GTK Demo","width":800,"height":600}]}"#
+            r#"{"ok":true,"windows":[{"id":2,"title":"GTK Demo","width":800,"height":600,"fixed":true}]}"#
         );
     }
 }
