@@ -17,8 +17,6 @@ use tokio::{
 use crate::command::{close_line, launch_line, list_line, screenshot_line, AutomationCommand};
 
 const STDERR_LINE_LIMIT: usize = 200;
-const DEFAULT_DYNAMIC_WIDTH: u32 = 1280;
-const DEFAULT_DYNAMIC_HEIGHT: u32 = 720;
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const FORCED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const QUIT_COMMAND: &str = r#"{"type":"quit"}"#;
@@ -27,9 +25,6 @@ const QUIT_COMMAND: &str = r#"{"type":"quit"}"#;
 pub struct AutoWcSessionConfig {
     pub autowc_binary: PathBuf,
     pub command: Vec<String>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub dynamic_resize: bool,
     pub stay_alive: bool,
     pub key_event_interval_ms: Option<u64>,
     pub chord_key_interval_ms: Option<u64>,
@@ -472,16 +467,7 @@ impl Drop for AutoWcProcess {
 }
 
 fn autowc_args(config: &AutoWcSessionConfig) -> Vec<String> {
-    let output_sizing =
-        resolve_output_sizing(config).expect("invalid AutoWC session output sizing");
     let mut args = vec!["--json".into()];
-
-    if !output_sizing.dynamic_resize {
-        args.push("--width".into());
-        args.push(output_sizing.width.to_string());
-        args.push("--height".into());
-        args.push(output_sizing.height.to_string());
-    }
 
     if config.stay_alive {
         args.push("--stay-alive".into());
@@ -504,49 +490,6 @@ fn autowc_args(config: &AutoWcSessionConfig) -> Vec<String> {
     );
     args.extend(config.command.clone());
     args
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct OutputSizing {
-    width: u32,
-    height: u32,
-    dynamic_resize: bool,
-}
-
-fn resolve_output_sizing(config: &AutoWcSessionConfig) -> Result<OutputSizing, SessionError> {
-    let has_width = config.width.is_some();
-    let has_height = config.height.is_some();
-
-    if config.dynamic_resize && (has_width || has_height) {
-        return Err(SessionError::new(
-            "dynamic resize cannot be used with explicit width or height",
-        ));
-    }
-
-    let dynamic_resize = config.dynamic_resize || (!has_width && !has_height);
-    if dynamic_resize {
-        return Ok(OutputSizing {
-            width: DEFAULT_DYNAMIC_WIDTH,
-            height: DEFAULT_DYNAMIC_HEIGHT,
-            dynamic_resize,
-        });
-    }
-
-    let (Some(width), Some(height)) = (config.width, config.height) else {
-        return Err(SessionError::new(
-            "width and height must be specified together",
-        ));
-    };
-
-    if width == 0 || height == 0 {
-        return Err(SessionError::new("width and height must be positive"));
-    }
-
-    Ok(OutputSizing {
-        width,
-        height,
-        dynamic_resize,
-    })
 }
 
 fn push_optional_ms_arg(args: &mut Vec<String>, flag: &str, value: Option<u64>) {
@@ -848,9 +791,6 @@ mod tests {
         let args = autowc_args(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["gtk4-demo".into()],
-            width: Some(800),
-            height: Some(600),
-            dynamic_resize: false,
             stay_alive: true,
             key_event_interval_ms: Some(25),
             chord_key_interval_ms: Some(10),
@@ -862,10 +802,6 @@ mod tests {
             args,
             [
                 "--json",
-                "--width",
-                "800",
-                "--height",
-                "600",
                 "--stay-alive",
                 "--key-event-interval-ms",
                 "25",
@@ -885,9 +821,6 @@ mod tests {
         let args = autowc_args(&AutoWcSessionConfig {
             autowc_binary: "autowc".into(),
             command: vec!["foot".into()],
-            width: None,
-            height: None,
-            dynamic_resize: false,
             stay_alive: false,
             key_event_interval_ms: None,
             chord_key_interval_ms: None,
@@ -896,64 +829,5 @@ mod tests {
         });
 
         assert_eq!(args, ["--json", "foot"]);
-    }
-
-    #[test]
-    fn omits_obsolete_dynamic_resize_flag_when_requested_explicitly() {
-        let args = autowc_args(&AutoWcSessionConfig {
-            autowc_binary: "autowc".into(),
-            command: vec!["foot".into()],
-            width: None,
-            height: None,
-            dynamic_resize: true,
-            stay_alive: false,
-            key_event_interval_ms: None,
-            chord_key_interval_ms: None,
-            chord_hold_ms: None,
-            command_interval_ms: None,
-        });
-
-        assert_eq!(args, ["--json", "foot"]);
-    }
-
-    #[test]
-    fn rejects_partial_launch_size() {
-        let err = resolve_output_sizing(&AutoWcSessionConfig {
-            autowc_binary: "autowc".into(),
-            command: vec!["foot".into()],
-            width: Some(1280),
-            height: None,
-            dynamic_resize: false,
-            stay_alive: false,
-            key_event_interval_ms: None,
-            chord_key_interval_ms: None,
-            chord_hold_ms: None,
-            command_interval_ms: None,
-        })
-        .unwrap_err();
-
-        assert_eq!(err.message, "width and height must be specified together");
-    }
-
-    #[test]
-    fn rejects_dynamic_resize_with_explicit_launch_size() {
-        let err = resolve_output_sizing(&AutoWcSessionConfig {
-            autowc_binary: "autowc".into(),
-            command: vec!["foot".into()],
-            width: Some(1280),
-            height: Some(720),
-            dynamic_resize: true,
-            stay_alive: false,
-            key_event_interval_ms: None,
-            chord_key_interval_ms: None,
-            chord_hold_ms: None,
-            command_interval_ms: None,
-        })
-        .unwrap_err();
-
-        assert_eq!(
-            err.message,
-            "dynamic resize cannot be used with explicit width or height"
-        );
     }
 }

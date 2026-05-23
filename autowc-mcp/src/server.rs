@@ -58,9 +58,6 @@ impl AutoWcMcpServer {
         let session = AutoWcSession::new(AutoWcSessionConfig {
             autowc_binary,
             command: vec!["true".into()],
-            width: None,
-            height: None,
-            dynamic_resize: false,
             stay_alive: true,
             key_event_interval_ms: None,
             chord_key_interval_ms: None,
