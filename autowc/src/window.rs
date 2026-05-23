@@ -17,14 +17,6 @@ pub enum WindowSizing {
 }
 
 impl WindowSizing {
-    pub fn from_dynamic_resize(dynamic_resize: bool, initial_size: Size<i32, Logical>) -> Self {
-        if dynamic_resize {
-            Self::Dynamic
-        } else {
-            Self::Fixed { size: initial_size }
-        }
-    }
-
     pub fn is_fixed(self) -> bool {
         matches!(self, Self::Fixed { .. })
     }
@@ -94,13 +86,6 @@ impl WindowGeometry {
             host_size: None,
             host_scale_factor: 1.0,
         }
-    }
-
-    pub fn from_dynamic_resize(dynamic_resize: bool, initial_size: Size<i32, Logical>) -> Self {
-        Self::new(WindowSizing::from_dynamic_resize(
-            dynamic_resize,
-            initial_size,
-        ))
     }
 
     pub fn sizing(&self) -> WindowSizing {
@@ -509,20 +494,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn window_sizing_tracks_legacy_dynamic_resize_flag() {
-        assert_eq!(
-            WindowSizing::from_dynamic_resize(true, Size::from((800, 600))),
-            WindowSizing::Dynamic
-        );
-        assert_eq!(
-            WindowSizing::from_dynamic_resize(false, Size::from((800, 600))),
-            WindowSizing::Fixed {
-                size: Size::from((800, 600))
-            }
-        );
-    }
-
-    #[test]
     fn dynamic_window_geometry_uses_host_size() {
         let mut geometry = WindowGeometry::new(WindowSizing::Dynamic);
         geometry.set_host(Size::from((2400, 1350)), 1.25);
@@ -540,6 +511,16 @@ mod tests {
         assert_eq!(
             geometry.final_pass_logical_size(Size::from((2400, 1350)), Size::from((1920, 1080))),
             Size::from((2400, 1350))
+        );
+    }
+
+    #[test]
+    fn dynamic_window_geometry_without_host_uses_default_resolution() {
+        let geometry = WindowGeometry::new(WindowSizing::Dynamic);
+
+        assert_eq!(
+            geometry.virtual_size(Size::from((800, 600))),
+            Size::from((800, 600))
         );
     }
 

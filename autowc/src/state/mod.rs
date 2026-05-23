@@ -55,7 +55,6 @@ pub struct AutoWC {
 
     pub loop_signal: LoopSignal,
     pub initial_virtual_size: Size<i32, Logical>,
-    pub dynamic_resize: bool,
     pub windows: WindowRegistry,
     pub first_alive_window_id: Option<AutoWindowId>,
     pub focused_window_id: Option<AutoWindowId>,
@@ -97,7 +96,6 @@ impl AutoWC {
         event_loop: &mut EventLoop<Self>,
         display: Display<Self>,
         initial_virtual_size: Size<i32, Logical>,
-        dynamic_resize: bool,
         stay_alive: bool,
         timing: TimingOptions,
         protocol: Protocol,
@@ -105,7 +103,6 @@ impl AutoWC {
         let start_time = std::time::Instant::now();
         debug!(
             ?initial_virtual_size,
-            dynamic_resize,
             stay_alive,
             ?timing,
             ?protocol,
@@ -158,7 +155,6 @@ impl AutoWC {
             loop_signal,
             socket_name,
             initial_virtual_size,
-            dynamic_resize,
             windows: WindowRegistry::new(),
             first_alive_window_id: None,
             focused_window_id: None,
@@ -396,9 +392,7 @@ impl AutoWC {
         self.windows
             .get(window_id)
             .map(|window| *window.geometry())
-            .unwrap_or_else(|| {
-                WindowGeometry::from_dynamic_resize(self.dynamic_resize, self.initial_virtual_size)
-            })
+            .unwrap_or_else(|| WindowGeometry::new(WindowSizing::Dynamic))
     }
 
     pub fn window_sizing(&self, window_id: AutoWindowId) -> WindowSizing {
@@ -446,10 +440,7 @@ impl AutoWC {
         self.windows
             .get_mut(window_id)
             .expect("AutoWC window is missing")
-            .set_geometry(WindowGeometry::from_dynamic_resize(
-                self.dynamic_resize,
-                self.initial_virtual_size,
-            ));
+            .set_geometry(WindowGeometry::new(WindowSizing::Dynamic));
         self.create_output_for_window(window_id);
 
         self.configure_probe(&window);

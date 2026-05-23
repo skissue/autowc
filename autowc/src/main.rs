@@ -28,17 +28,13 @@ const DEFAULT_INITIAL_HEIGHT: i32 = 720;
 #[derive(Debug, Parser)]
 #[command(name = "autowc", about = "A small nested compositor for automation")]
 struct Cli {
-    /// Virtual output width in logical pixels.
+    /// Initial virtual output width in logical pixels.
     #[arg(long)]
     width: Option<i32>,
 
-    /// Virtual output height in logical pixels.
+    /// Initial virtual output height in logical pixels.
     #[arg(long)]
     height: Option<i32>,
-
-    /// Resize the virtual output to match the host window.
-    #[arg(long)]
-    dynamic_resize: bool,
 
     /// Keep AutoWC running after all client windows close.
     #[arg(long)]
@@ -93,7 +89,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut event_loop,
         display,
         output_sizing.initial_size,
-        output_sizing.dynamic_resize,
         cli.stay_alive,
         timing,
         protocol,
@@ -137,22 +132,15 @@ fn init_logging() {
 #[derive(Debug, PartialEq, Eq)]
 struct OutputSizing {
     initial_size: Size<i32, Logical>,
-    dynamic_resize: bool,
 }
 
 fn output_sizing_from_cli(cli: &Cli) -> Result<OutputSizing, Box<dyn std::error::Error>> {
     let has_width = cli.width.is_some();
     let has_height = cli.height.is_some();
 
-    if cli.dynamic_resize && (has_width || has_height) {
-        return Err("dynamic resize cannot be used with explicit width or height".into());
-    }
-
-    let dynamic_resize = cli.dynamic_resize || (!has_width && !has_height);
-    if dynamic_resize {
+    if !has_width && !has_height {
         return Ok(OutputSizing {
             initial_size: Size::from((DEFAULT_INITIAL_WIDTH, DEFAULT_INITIAL_HEIGHT)),
-            dynamic_resize,
         });
     }
 
@@ -166,7 +154,6 @@ fn output_sizing_from_cli(cli: &Cli) -> Result<OutputSizing, Box<dyn std::error:
 
     Ok(OutputSizing {
         initial_size: Size::from((width, height)),
-        dynamic_resize,
     })
 }
 
@@ -226,27 +213,25 @@ mod tests {
     }
 
     #[test]
-    fn output_sizing_defaults_to_dynamic_without_resolution_options() {
+    fn output_sizing_defaults_to_default_initial_size_without_resolution_options() {
         let cli = parse(&["autowc", "foot"]);
 
         assert_eq!(
             output_sizing_from_cli(&cli).unwrap(),
             OutputSizing {
                 initial_size: Size::from((DEFAULT_INITIAL_WIDTH, DEFAULT_INITIAL_HEIGHT)),
-                dynamic_resize: true,
             }
         );
     }
 
     #[test]
-    fn output_sizing_uses_fixed_size_when_resolution_options_are_specified() {
+    fn output_sizing_uses_explicit_initial_size_when_resolution_options_are_specified() {
         let cli = parse(&["autowc", "--width", "800", "--height", "600", "foot"]);
 
         assert_eq!(
             output_sizing_from_cli(&cli).unwrap(),
             OutputSizing {
                 initial_size: Size::from((800, 600)),
-                dynamic_resize: false,
             }
         );
     }
@@ -262,25 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn output_sizing_rejects_dynamic_resize_with_resolution_options() {
-        let cli = parse(&[
-            "autowc",
-            "--dynamic-resize",
-            "--width",
-            "800",
-            "--height",
-            "600",
-            "foot",
-        ]);
-
-        assert_eq!(
-            output_sizing_from_cli(&cli).unwrap_err().to_string(),
-            "dynamic resize cannot be used with explicit width or height"
-        );
-    }
-
-    #[test]
-    fn output_sizing_rejects_non_positive_fixed_size() {
+    fn output_sizing_rejects_non_positive_initial_size() {
         let cli = parse(&["autowc", "--width", "0", "--height", "600", "foot"]);
 
         assert_eq!(
