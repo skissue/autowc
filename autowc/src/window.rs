@@ -10,6 +10,71 @@ use smithay::{
 };
 use tracing::{debug, trace};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowResizePolicy {
+    Dynamic,
+    Fixed,
+}
+
+impl WindowResizePolicy {
+    pub fn from_dynamic_resize(dynamic_resize: bool) -> Self {
+        if dynamic_resize {
+            Self::Dynamic
+        } else {
+            Self::Fixed
+        }
+    }
+
+    pub fn is_fixed(self) -> bool {
+        self == Self::Fixed
+    }
+
+    pub fn virtual_size_for_host(
+        self,
+        host_size: Size<i32, Physical>,
+        host_scale_factor: f64,
+        fixed_size: Size<i32, Logical>,
+    ) -> Size<i32, Logical> {
+        match self {
+            Self::Dynamic => host_size
+                .to_f64()
+                .to_logical(host_scale_factor)
+                .to_i32_ceil(),
+            Self::Fixed => fixed_size,
+        }
+    }
+
+    pub fn output_mode(
+        self,
+        host_size: Size<i32, Physical>,
+        virtual_size: Size<i32, Logical>,
+        output_scale: f64,
+    ) -> (Size<i32, Physical>, f64) {
+        match self {
+            Self::Dynamic => (host_size, output_scale),
+            Self::Fixed => (virtual_size.to_physical(1), 1.0),
+        }
+    }
+
+    pub fn virtual_framebuffer_scale(self, host_scale_factor: f64) -> f64 {
+        match self {
+            Self::Dynamic => host_scale_factor,
+            Self::Fixed => 1.0,
+        }
+    }
+
+    pub fn final_pass_logical_size(
+        self,
+        host_size: Size<i32, Physical>,
+        virtual_size: Size<i32, Logical>,
+    ) -> Size<i32, Logical> {
+        match self {
+            Self::Dynamic => host_size.to_logical(1),
+            Self::Fixed => virtual_size,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AutoWindowId(u64);
 
@@ -317,6 +382,58 @@ pub enum AutoWindowState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_policy_tracks_legacy_dynamic_resize_flag() {
+        assert_eq!(
+            WindowResizePolicy::from_dynamic_resize(true),
+            WindowResizePolicy::Dynamic
+        );
+        assert_eq!(
+            WindowResizePolicy::from_dynamic_resize(false),
+            WindowResizePolicy::Fixed
+        );
+    }
+
+    #[test]
+    fn dynamic_resize_policy_uses_host_size() {
+        let policy = WindowResizePolicy::Dynamic;
+
+        assert!(!policy.is_fixed());
+        assert_eq!(
+            policy.virtual_size_for_host(Size::from((2400, 1350)), 1.25, Size::from((800, 600))),
+            Size::from((1920, 1080))
+        );
+        assert_eq!(
+            policy.output_mode(Size::from((2400, 1350)), Size::from((800, 600)), 1.25),
+            (Size::from((2400, 1350)), 1.25)
+        );
+        assert_eq!(policy.virtual_framebuffer_scale(1.25), 1.25);
+        assert_eq!(
+            policy.final_pass_logical_size(Size::from((2400, 1350)), Size::from((800, 600))),
+            Size::from((2400, 1350))
+        );
+    }
+
+    #[test]
+    fn fixed_resize_policy_preserves_virtual_size() {
+        let policy = WindowResizePolicy::Fixed;
+
+        assert!(policy.is_fixed());
+        assert_eq!(
+            policy.virtual_size_for_host(Size::from((2400, 1350)), 1.25, Size::from((800, 600))),
+            Size::from((800, 600))
+        );
+        assert_eq!(
+            policy.output_mode(Size::from((2400, 1350)), Size::from((800, 600)), 1.25),
+            (Size::from((800, 600)), 1.0)
+        );
+        assert_eq!(policy.virtual_framebuffer_scale(1.25), 1.0);
+        assert_eq!(
+            policy.final_pass_logical_size(Size::from((2400, 1350)), Size::from((800, 600))),
+            Size::from((800, 600))
+        );
+    }
 
     #[test]
     fn registry_allocates_stable_distinct_window_ids() {

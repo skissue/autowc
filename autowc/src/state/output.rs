@@ -62,11 +62,8 @@ impl AutoWC {
         let Some(output) = self.output_for_window(window_id) else {
             return;
         };
-        let (mode_size, scale) = if self.dynamic_resize {
-            (host_size, output_scale)
-        } else {
-            (virtual_size.to_physical(1), 1.0)
-        };
+        let (mode_size, scale) =
+            self.output_mode_for_window(window_id, host_size, virtual_size, output_scale);
         debug!(?window_id, ?mode_size, scale, "updating window output");
         update_output_mode(&output, mode_size, scale);
     }

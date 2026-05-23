@@ -70,12 +70,19 @@ impl RenderWindow {
         self.host_scale_factor = host.scale_factor;
         self.host_fullscreen = fullscreen;
 
-        let virtual_size = host.virtual_size_for(state);
+        let virtual_size =
+            state.virtual_size_for_host_resize(auto_window_id, host.size, host.scale_factor);
+        let (_, output_scale) = state.output_mode_for_window(
+            auto_window_id,
+            host.size,
+            virtual_size,
+            host.scale_factor,
+        );
         state.resize_window_host(
             auto_window_id,
             host.size,
             virtual_size,
-            host.output_scale(state),
+            output_scale,
             fullscreen,
         );
         self.damage_tracker = OutputDamageTracker::new(host.size, 1.0, Transform::Flipped180);
@@ -103,7 +110,14 @@ impl RenderWindows {
         fullscreen: bool,
     ) {
         let host = HostGeometry::new(size, scale_factor);
-        let virtual_size = host.virtual_size_for(state);
+        let virtual_size =
+            state.virtual_size_for_host_resize(auto_window_id, host.size, host.scale_factor);
+        let (_, output_scale) = state.output_mode_for_window(
+            auto_window_id,
+            host.size,
+            virtual_size,
+            host.scale_factor,
+        );
         debug!(
             ?host_window_id,
             ?auto_window_id,
@@ -118,7 +132,7 @@ impl RenderWindows {
             host_window_id,
             host.size,
             virtual_size,
-            host.output_scale(state),
+            output_scale,
             fullscreen,
         );
         let Some(output) = state.output_for_window(auto_window_id) else {
@@ -255,11 +269,9 @@ fn render_host_window(
 
     {
         let (renderer, mut framebuffer) = backend.bind(host_window_id).unwrap();
-        let virtual_scale = if state.dynamic_resize {
-            render_window.host_scale_factor
-        } else {
-            1.0
-        };
+        let virtual_scale = state
+            .window_resize_policy(auto_window_id)
+            .virtual_framebuffer_scale(render_window.host_scale_factor);
         let virtual_size = state.window_virtual_size(auto_window_id);
         let virtual_buffer_size = buffer_size(virtual_size, virtual_scale);
 
@@ -326,7 +338,7 @@ fn render_host_window(
             Some(vec![Rectangle::from_size(virtual_buffer_size)]),
         );
         let presentation_size =
-            final_pass_logical_size(state.dynamic_resize, render_window.host_size, virtual_size);
+            state.final_pass_logical_size(auto_window_id, render_window.host_size, virtual_size);
         let virtual_element = TextureRenderElement::from_texture_buffer(
             (0.0, 0.0),
             &virtual_texture,
@@ -448,22 +460,6 @@ impl HostGeometry {
             .to_logical(self.scale_factor)
             .to_i32_ceil()
     }
-
-    fn virtual_size_for(self, state: &AutoWC) -> Size<i32, Logical> {
-        if state.dynamic_resize {
-            self.virtual_size()
-        } else {
-            state.initial_virtual_size
-        }
-    }
-
-    fn output_scale(self, state: &AutoWC) -> f64 {
-        if state.dynamic_resize {
-            self.scale_factor
-        } else {
-            1.0
-        }
-    }
 }
 
 fn buffer_size(size: Size<i32, Logical>, scale_factor: f64) -> Size<i32, Buffer> {
@@ -474,18 +470,6 @@ fn buffer_size(size: Size<i32, Logical>, scale_factor: f64) -> Size<i32, Buffer>
 
 fn buffer_size_as_physical(size: Size<i32, Buffer>) -> Size<i32, Physical> {
     Size::from((size.w, size.h))
-}
-
-fn final_pass_logical_size(
-    dynamic_resize: bool,
-    host_size: Size<i32, Physical>,
-    virtual_size: Size<i32, Logical>,
-) -> Size<i32, Logical> {
-    if dynamic_resize {
-        host_size.to_logical(1)
-    } else {
-        virtual_size
-    }
 }
 
 fn normalized_scale_factor(scale_factor: f64) -> f64 {

@@ -38,7 +38,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     host::HostWindowRequester,
     protocol::{ControlResponse, Protocol, WindowInfo},
-    window::{AutoWindowId, AutoWindowState, WindowRegistry},
+    window::{AutoWindowId, AutoWindowState, WindowRegistry, WindowResizePolicy},
 };
 
 mod clipboard;
@@ -390,6 +390,48 @@ impl AutoWC {
         let scale_x = viewport.size.w as f64 / virtual_size.w as f64;
         let scale_y = viewport.size.h as f64 / virtual_size.h as f64;
         Some(Point::from((x / scale_x, y / scale_y)))
+    }
+
+    pub fn window_resize_policy(&self, _window_id: AutoWindowId) -> WindowResizePolicy {
+        WindowResizePolicy::from_dynamic_resize(self.dynamic_resize)
+    }
+
+    pub fn window_is_fixed(&self, window_id: AutoWindowId) -> bool {
+        self.window_resize_policy(window_id).is_fixed()
+    }
+
+    pub fn virtual_size_for_host_resize(
+        &self,
+        window_id: AutoWindowId,
+        host_size: Size<i32, Physical>,
+        host_scale_factor: f64,
+    ) -> Size<i32, Logical> {
+        self.window_resize_policy(window_id).virtual_size_for_host(
+            host_size,
+            host_scale_factor,
+            self.initial_virtual_size,
+        )
+    }
+
+    pub fn output_mode_for_window(
+        &self,
+        window_id: AutoWindowId,
+        host_size: Size<i32, Physical>,
+        virtual_size: Size<i32, Logical>,
+        output_scale: f64,
+    ) -> (Size<i32, Physical>, f64) {
+        self.window_resize_policy(window_id)
+            .output_mode(host_size, virtual_size, output_scale)
+    }
+
+    pub fn final_pass_logical_size(
+        &self,
+        window_id: AutoWindowId,
+        host_size: Size<i32, Physical>,
+        virtual_size: Size<i32, Logical>,
+    ) -> Size<i32, Logical> {
+        self.window_resize_policy(window_id)
+            .final_pass_logical_size(host_size, virtual_size)
     }
 
     pub fn map_new_toplevel(&mut self, window: Window) {
